@@ -1,0 +1,9 @@
+{
+  "name": "Factor Navigator",
+  "description": "Browse and drag data factors from workflow steps onto the plot viewer.",
+  "isWebApp": true,
+  "serve": "build/web",
+  "tags": [],
+  "authors": ["tercen"],
+  "urls": ["https://github.com/tercen/factor_nav"]
+}

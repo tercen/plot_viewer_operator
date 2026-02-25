@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'Fira Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+      height: 100vh;
+      background: #FFFFFF;
+      padding: 16px;
+    }
+    .header {
+      font-size: 12px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: #4B5563;
+      padding: 8px 0;
+      border-bottom: 1px solid #E5E7EB;
+      margin-bottom: 8px;
+    }
+    .item {
+      font-size: 14px;
+      color: #374151;
+      padding: 6px 8px;
+      border-radius: 4px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .item:hover { background: #F9FAFB; }
+    .icon { font-size: 12px; color: #9CA3AF; }
+    .mock-label {
+      font-size: 11px;
+      color: #9CA3AF;
+      text-align: center;
+      padding: 16px 0;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">Team Navigator</div>
+  <div class="item"><span class="icon">&#x1f464;</span> Alice (Admin)</div>
+  <div class="item"><span class="icon">&#x1f464;</span> Bob (Editor)</div>
+  <div class="item"><span class="icon">&#x1f464;</span> Carol (Viewer)</div>
+  <div class="mock-label">(Mock Data)</div>
+  <script>
+    window.parent.postMessage({
+      type: 'app-ready',
+      source: { appId: 'team-nav', instanceId: '' },
+      target: 'orchestrator',
+      payload: {}
+    }, '*');
+
+    window.addEventListener('message', (e) => {
+      if (e.data && e.data.type) {
+        console.log('[TeamNav] Received:', e.data.type, e.data.payload);
+      }
+    });
+  </script>
+</body>
+</html>

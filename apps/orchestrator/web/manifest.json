@@ -1,0 +1,8 @@
+{
+  "name": "Tercen",
+  "short_name": "Tercen",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#FFFFFF",
+  "theme_color": "#1E40AF"
+}

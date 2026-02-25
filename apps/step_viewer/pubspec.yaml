@@ -1,0 +1,27 @@
+name: step_viewer
+description: Tercen step viewer — interactive plot visualization with spatial drop zones.
+publish_to: 'none'
+version: 0.1.0+1
+
+environment:
+  sdk: ^3.6.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+  provider: ^6.1.2
+  get_it: ^8.0.3
+  font_awesome_flutter: ^10.8.0
+  web: ^0.5.1
+  widget_library:
+    path: ../../packages/widget_library
+  sci_tercen_client:
+    path: /home/thiago/workspaces/tercen/main/sci_tercen_client/sci_tercen_client
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true

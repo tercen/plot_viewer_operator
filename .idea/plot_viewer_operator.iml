@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<module type="WEB_MODULE" version="4">
+  <component name="NewModuleRootManager">
+    <content url="file://$MODULE_DIR$">
+      <excludeFolder url="file://$MODULE_DIR$/apps/orchestrator/.dart_tool" />
+      <excludeFolder url="file://$MODULE_DIR$/apps/orchestrator/.pub" />
+      <excludeFolder url="file://$MODULE_DIR$/apps/orchestrator/build" />
+      <excludeFolder url="file://$MODULE_DIR$/apps/project_nav/.dart_tool" />
+      <excludeFolder url="file://$MODULE_DIR$/apps/project_nav/.pub" />
+      <excludeFolder url="file://$MODULE_DIR$/apps/project_nav/build" />
+      <excludeFolder url="file://$MODULE_DIR$/_local/api_test/.dart_tool" />
+      <excludeFolder url="file://$MODULE_DIR$/_local/api_test/.pub" />
+      <excludeFolder url="file://$MODULE_DIR$/_local/api_test/build" />
+      <excludeFolder url="file://$MODULE_DIR$/apps/factor_nav/.dart_tool" />
+      <excludeFolder url="file://$MODULE_DIR$/apps/factor_nav/.pub" />
+      <excludeFolder url="file://$MODULE_DIR$/apps/factor_nav/build" />
+      <excludeFolder url="file://$MODULE_DIR$/apps/step_viewer/.dart_tool" />
+      <excludeFolder url="file://$MODULE_DIR$/apps/step_viewer/.pub" />
+      <excludeFolder url="file://$MODULE_DIR$/apps/step_viewer/build" />
+      <excludeFolder url="file://$MODULE_DIR$/packages/widget_library/.dart_tool" />
+      <excludeFolder url="file://$MODULE_DIR$/packages/widget_library/.pub" />
+      <excludeFolder url="file://$MODULE_DIR$/packages/widget_library/build" />
+    </content>
+    <orderEntry type="inheritedJdk" />
+    <orderEntry type="sourceFolder" forTests="false" />
+    <orderEntry type="library" name="Dart SDK" level="project" />
+    <orderEntry type="library" name="Dart Packages" level="project" />
+  </component>
+</module>

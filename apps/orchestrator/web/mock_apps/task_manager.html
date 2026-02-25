@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'Fira Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+      height: 100vh;
+      background: #FFFFFF;
+      padding: 16px;
+    }
+    .header {
+      font-size: 12px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: #4B5563;
+      padding: 8px 0;
+      border-bottom: 1px solid #E5E7EB;
+      margin-bottom: 8px;
+    }
+    table { width: 100%; font-size: 14px; border-collapse: collapse; }
+    th {
+      text-align: left;
+      background: #F9FAFB;
+      padding: 8px 12px;
+      font-weight: 500;
+      color: #4B5563;
+      border-bottom: 1px solid #E5E7EB;
+    }
+    td { padding: 8px 12px; color: #374151; border-bottom: 1px solid #E5E7EB; }
+    .status {
+      font-size: 12px;
+      padding: 2px 8px;
+      border-radius: 9999px;
+      display: inline-block;
+    }
+    .status-done { background: #D1FAE5; color: #047857; }
+    .status-running { background: #DBEAFE; color: #1E40AF; }
+    .status-queued { background: #FEF3C7; color: #B45309; }
+    .mock-label {
+      font-size: 11px;
+      color: #9CA3AF;
+      text-align: center;
+      padding: 16px 0;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">Task Manager</div>
+  <table>
+    <tr><th>Task</th><th>Status</th><th>Duration</th></tr>
+    <tr>
+      <td>Scatter Plot Step</td>
+      <td><span class="status status-done">Done</span></td>
+      <td>2.3s</td>
+    </tr>
+    <tr>
+      <td>Bar Chart Step</td>
+      <td><span class="status status-running">Running</span></td>
+      <td>1.1s</td>
+    </tr>
+    <tr>
+      <td>QC Pipeline</td>
+      <td><span class="status status-queued">Queued</span></td>
+      <td>—</td>
+    </tr>
+  </table>
+  <div class="mock-label">(Mock Data)</div>
+  <script>
+    window.parent.postMessage({
+      type: 'app-ready',
+      source: { appId: 'task-manager', instanceId: '' },
+      target: 'orchestrator',
+      payload: {}
+    }, '*');
+
+    window.addEventListener('message', (e) => {
+      if (e.data && e.data.type) {
+        console.log('[TaskManager] Received:', e.data.type, e.data.payload);
+      }
+    });
+  </script>
+</body>
+</html>

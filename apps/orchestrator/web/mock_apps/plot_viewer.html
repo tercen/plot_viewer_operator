@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'Fira Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+      height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #FFFFFF;
+    }
+    .container {
+      text-align: center;
+    }
+    .icon { font-size: 48px; color: #1E40AF; opacity: 0.5; }
+    .title { font-size: 16px; color: #374151; margin-top: 8px; }
+    .subtitle { font-size: 12px; color: #6B7280; margin-top: 4px; }
+    .log {
+      margin-top: 24px;
+      padding: 8px;
+      background: #F3F4F6;
+      border-radius: 4px;
+      font-size: 11px;
+      color: #4B5563;
+      max-height: 200px;
+      overflow-y: auto;
+      text-align: left;
+      min-width: 300px;
+    }
+    .log-entry { padding: 2px 0; border-bottom: 1px solid #E5E7EB; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="icon">&#x1f4ca;</div>
+    <div class="title">Plot Viewer</div>
+    <div class="subtitle">(Mock — GGRS web component will go here)</div>
+    <div class="log" id="log"></div>
+  </div>
+  <script>
+    const appId = 'step-viewer';
+    const logEl = document.getElementById('log');
+
+    function addLog(msg) {
+      const entry = document.createElement('div');
+      entry.className = 'log-entry';
+      entry.textContent = new Date().toLocaleTimeString() + ' — ' + msg;
+      logEl.prepend(entry);
+      if (logEl.children.length > 20) logEl.lastChild.remove();
+    }
+
+    function send(type, target, payload) {
+      window.parent.postMessage({
+        type: type,
+        source: { appId: appId, instanceId: '' },
+        target: target,
+        payload: payload || {}
+      }, '*');
+    }
+
+    send('app-ready', 'orchestrator');
+    addLog('Ready');
+
+    window.addEventListener('message', (e) => {
+      if (e.data && e.data.type) {
+        addLog('Received: ' + e.data.type + ' ' + JSON.stringify(e.data.payload || {}));
+        console.log('[PlotViewer] Received:', e.data.type, e.data.payload);
+
+        if (e.data.type === 'run-requested') {
+          addLog('Running computation...');
+          // Simulate progress
+          let progress = 0;
+          const interval = setInterval(() => {
+            progress += 0.2;
+            send('render-progress', 'toolbar', { progress: Math.min(progress, 1.0) });
+            addLog('Progress: ' + Math.round(Math.min(progress, 1.0) * 100) + '%');
+            if (progress >= 1.0) {
+              clearInterval(interval);
+              addLog('Render complete');
+            }
+          }, 500);
+        }
+      }
+    });
+  </script>
+</body>
+</html>

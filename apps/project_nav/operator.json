@@ -1,0 +1,9 @@
+{
+  "name": "Project Navigator",
+  "description": "Tree browser for navigating Tercen projects, workflows, and data steps.",
+  "isWebApp": true,
+  "serve": "build/web",
+  "tags": [],
+  "authors": ["tercen"],
+  "urls": ["https://github.com/tercen/project_nav"]
+}

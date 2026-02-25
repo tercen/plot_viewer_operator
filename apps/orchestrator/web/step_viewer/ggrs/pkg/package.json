@@ -1,0 +1,23 @@
+{
+  "name": "ggrs-wasm",
+  "type": "module",
+  "collaborators": [
+    "Tercen Team"
+  ],
+  "description": "WASM bindings for GGRS - Browser integration",
+  "version": "0.4.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/tercen/ggrs"
+  },
+  "files": [
+    "ggrs_wasm_bg.wasm",
+    "ggrs_wasm.js",
+    "ggrs_wasm.d.ts"
+  ],
+  "main": "ggrs_wasm.js",
+  "types": "ggrs_wasm.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}

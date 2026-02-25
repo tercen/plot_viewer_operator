@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'Fira Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+      height: 100vh;
+      display: flex;
+      align-items: center;
+      background: #FFFFFF;
+      border-bottom: 1px solid #E5E7EB;
+      padding: 0 16px;
+      gap: 8px;
+    }
+    .btn {
+      font-size: 13px;
+      font-weight: 500;
+      padding: 6px 12px;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      background: transparent;
+      color: #374151;
+    }
+    .btn:hover { background: #F3F4F6; }
+    .btn-primary { color: #1E40AF; }
+    .spacer { flex: 1; }
+    .label {
+      font-size: 14px;
+      font-weight: 600;
+      color: #1E40AF;
+      margin-right: 8px;
+    }
+  </style>
+</head>
+<body>
+  <span class="label">Tercen</span>
+  <button class="btn" id="btn-save" title="Save">&#x1f4be; Save</button>
+  <button class="btn btn-primary" id="btn-run" title="Run">&#x25b6; Run</button>
+  <button class="btn" id="btn-export" title="Export">&#x2b07; Export</button>
+  <span class="spacer"></span>
+  <button class="btn" id="btn-error" title="Simulate error">&#x26a0; Error</button>
+  <button class="btn" id="btn-theme" title="Toggle theme">&#x2600; Theme</button>
+  <script>
+    const appId = 'toolbar';
+    const instanceId = '';
+
+    function send(type, target, payload) {
+      window.parent.postMessage({
+        type: type,
+        source: { appId: appId, instanceId: instanceId },
+        target: target,
+        payload: payload || {}
+      }, '*');
+    }
+
+    // Send ready
+    send('app-ready', 'orchestrator');
+
+    // Button handlers
+    document.getElementById('btn-save').onclick = () => send('save-requested', 'step-viewer');
+    document.getElementById('btn-run').onclick = () => send('run-requested', 'step-viewer');
+    document.getElementById('btn-export').onclick = () => send('export-requested', 'step-viewer', { format: 'png' });
+    document.getElementById('btn-theme').onclick = () => send('theme-changed', '*', { theme: 'toggle' });
+    document.getElementById('btn-error').onclick = () => send('app-error', 'orchestrator', { message: 'Simulated error from toolbar for testing the error overlay.' });
+
+    // Listen for incoming messages
+    window.addEventListener('message', (e) => {
+      if (e.data && e.data.type) {
+        console.log('[Toolbar] Received:', e.data.type, e.data.payload);
+      }
+    });
+  </script>
+</body>
+</html>

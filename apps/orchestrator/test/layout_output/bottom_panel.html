@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html><head><style>
+body { margin: 0; font-family: monospace; font-size: 11px; }
+.el { position: absolute; border: 1px solid #333; display: flex; align-items: center; justify-content: center; overflow: hidden; box-sizing: border-box; }
+h2 { margin: 10px; }
+</style></head><body>
+<h2>Layout: bottom_panel (1280x720)</h2>
+<div style="position:relative; width:1280px; height:720px; border:2px solid black; margin:10px;">
+<div class="el" style="left:0px; top:0px; width:800px; height:48px; background:#BBDEFB;">Toolbar<br>800x48</div>
+<div class="el" style="left:0px; top:48px; width:40px; height:320px; background:#E0E0E0;">Icon Strip<br>40x320</div>
+<div class="el" style="left:40px; top:48px; width:760px; height:32px; background:#EEEEEE;">Content Header<br>760x32</div>
+<div class="el" style="left:40px; top:80px; width:760px; height:288px; background:#E3F2FD;">Content Area<br>760x288</div>
+<div class="el" style="left:40px; top:80px; width:760px; height:288px; background:#BBDEFB;">Content Cell 0<br>760x288</div>
+<div class="el" style="left:0px; top:368px; width:800px; height:28px; background:#E0E0E0;">Bottom Icons<br>800x28</div>
+<div class="el" style="left:0px; top:400px; width:800px; height:200px; background:#FFE0B2;">Bottom Panel<br>800x200</div>
+</div>
+<table border="1" cellpadding="4" style="margin:10px; border-collapse:collapse; font-size:12px;">
+<tr><th>Element</th><th>Left</th><th>Top</th><th>Width</th><th>Height</th><th>Right</th><th>Bottom</th></tr>
+<tr><td>Toolbar</td><td>0</td><td>0</td><td>800</td><td>48</td><td>800</td><td>48</td></tr>
+<tr><td>Icon Strip</td><td>0</td><td>48</td><td>40</td><td>320</td><td>40</td><td>368</td></tr>
+<tr><td>Content Header</td><td>40</td><td>48</td><td>760</td><td>32</td><td>800</td><td>80</td></tr>
+<tr><td>Content Area</td><td>40</td><td>80</td><td>760</td><td>288</td><td>800</td><td>368</td></tr>
+<tr><td>Content Cell 0</td><td>40</td><td>80</td><td>760</td><td>288</td><td>800</td><td>368</td></tr>
+<tr><td>Bottom Icons</td><td>0</td><td>368</td><td>800</td><td>28</td><td>800</td><td>396</td></tr>
+<tr><td>Bottom Panel</td><td>0</td><td>400</td><td>800</td><td>200</td><td>800</td><td>600</td></tr>
+</table>
+</body></html>

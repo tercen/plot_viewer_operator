@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'Fira Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      background: #FFFFFF;
+      padding: 16px;
+    }
+    .header {
+      font-size: 12px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: #4B5563;
+      padding: 8px 0;
+      border-bottom: 1px solid #E5E7EB;
+      margin-bottom: 8px;
+    }
+    .messages { flex: 1; overflow-y: auto; }
+    .message {
+      font-size: 14px;
+      color: #374151;
+      padding: 8px;
+      margin-bottom: 4px;
+      border-radius: 8px;
+      background: #F3F4F6;
+    }
+    .message.assistant { background: #DBEAFE; color: #1E40AF; }
+    .mock-label {
+      font-size: 11px;
+      color: #9CA3AF;
+      text-align: center;
+      padding: 8px 0;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">AI Chat</div>
+  <div class="messages">
+    <div class="message">How do I create a scatter plot?</div>
+    <div class="message assistant">Select your X and Y axis variables in the Plot Viewer, then choose "scatter" as the chart type.</div>
+    <div class="message">Can I add color by group?</div>
+    <div class="message assistant">Yes, drag a categorical variable to the Color zone in the plot configuration panel.</div>
+  </div>
+  <div class="mock-label">(Mock Data)</div>
+  <script>
+    window.parent.postMessage({
+      type: 'app-ready',
+      source: { appId: 'ai-chat', instanceId: '' },
+      target: 'orchestrator',
+      payload: {}
+    }, '*');
+
+    window.addEventListener('message', (e) => {
+      if (e.data && e.data.type) {
+        console.log('[AIChat] Received:', e.data.type, e.data.payload);
+      }
+    });
+  </script>
+</body>
+</html>

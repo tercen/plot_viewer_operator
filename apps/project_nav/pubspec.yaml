@@ -1,0 +1,27 @@
+name: project_nav
+description: Tercen project navigator — tree browser for projects, workflows, and data steps.
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.5.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+  provider: ^6.1.2
+  get_it: ^8.0.3
+  font_awesome_flutter: ^10.8.0
+  web: ^0.5.1
+  sci_tercen_client:
+    path: /home/thiago/workspaces/tercen/main/sci_tercen_client/sci_tercen_client
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/data/

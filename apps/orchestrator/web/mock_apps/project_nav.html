@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'Fira Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+      height: 100vh;
+      background: #FFFFFF;
+      padding: 16px;
+    }
+    .header {
+      font-size: 12px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: #4B5563;
+      padding: 8px 0;
+      border-bottom: 1px solid #E5E7EB;
+      margin-bottom: 8px;
+    }
+    .item {
+      font-size: 14px;
+      color: #374151;
+      padding: 6px 8px;
+      border-radius: 4px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .item:hover { background: #F9FAFB; }
+    .item.selected { background: #DBEAFE; color: #1E40AF; }
+    .icon { font-size: 12px; color: #9CA3AF; }
+    .indent { padding-left: 24px; }
+    .indent2 { padding-left: 48px; }
+    .mock-label {
+      font-size: 11px;
+      color: #9CA3AF;
+      text-align: center;
+      padding: 16px 0;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">Project Navigator</div>
+  <div class="item" onclick="selectItem(this, 'project', 'p1')">
+    <span class="icon">&#x1f4c1;</span> Demo Project
+  </div>
+  <div class="item indent" onclick="selectItem(this, 'workflow', 'w1')">
+    <span class="icon">&#x1f504;</span> Analysis Workflow
+  </div>
+  <div class="item indent2 selected" onclick="selectStep('s1')">
+    <span class="icon">&#x25b6;</span> Scatter Plot Step
+  </div>
+  <div class="item indent2" onclick="selectStep('s2')">
+    <span class="icon">&#x25b6;</span> Bar Chart Step
+  </div>
+  <div class="item indent" onclick="selectItem(this, 'workflow', 'w2')">
+    <span class="icon">&#x1f504;</span> QC Pipeline
+  </div>
+  <div class="mock-label">(Mock Data)</div>
+  <script>
+    const appId = 'project-nav';
+
+    function send(type, target, payload) {
+      window.parent.postMessage({
+        type: type,
+        source: { appId: appId, instanceId: '' },
+        target: target,
+        payload: payload || {}
+      }, '*');
+    }
+
+    send('app-ready', 'orchestrator');
+
+    function selectItem(el, type, id) {
+      document.querySelectorAll('.item').forEach(i => i.classList.remove('selected'));
+      el.classList.add('selected');
+    }
+
+    function selectStep(stepId) {
+      document.querySelectorAll('.item').forEach(i => i.classList.remove('selected'));
+      event.target.closest('.item').classList.add('selected');
+      send('step-selected', 'step-viewer', {
+        projectId: 'p1',
+        workflowId: 'w1',
+        stepId: stepId
+      });
+    }
+
+    window.addEventListener('message', (e) => {
+      if (e.data && e.data.type) {
+        console.log('[ProjectNav] Received:', e.data.type, e.data.payload);
+      }
+    });
+  </script>
+</body>
+</html>
