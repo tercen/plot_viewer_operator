@@ -237,12 +237,12 @@ if (!('encodeInto' in cachedTextEncoder)) {
 
 let WASM_VECTOR_LEN = 0;
 
-function __wasm_bindgen_func_elem_954(arg0, arg1, arg2) {
-    wasm.__wasm_bindgen_func_elem_954(arg0, arg1, addHeapObject(arg2));
+function __wasm_bindgen_func_elem_1011(arg0, arg1, arg2) {
+    wasm.__wasm_bindgen_func_elem_1011(arg0, arg1, addHeapObject(arg2));
 }
 
-function __wasm_bindgen_func_elem_36361(arg0, arg1, arg2, arg3) {
-    wasm.__wasm_bindgen_func_elem_36361(arg0, arg1, addHeapObject(arg2), addHeapObject(arg3));
+function __wasm_bindgen_func_elem_36427(arg0, arg1, arg2, arg3) {
+    wasm.__wasm_bindgen_func_elem_36427(arg0, arg1, addHeapObject(arg2), addHeapObject(arg3));
 }
 
 const GGRSRendererFinalization = (typeof FinalizationRegistry === 'undefined')
@@ -265,6 +265,27 @@ export class GGRSRenderer {
     free() {
         const ptr = this.__destroy_into_raw();
         wasm.__wbg_ggrsrenderer_free(ptr, 0);
+    }
+    /**
+     * Reset visible range to full data range.
+     * Returns snapshot JSON: { vis_x_min, vis_x_max, vis_y_min, vis_y_max }
+     * @returns {string}
+     */
+    resetView() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.ggrsrenderer_resetView(retptr, this.__wbg_ptr);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            deferred1_0 = r0;
+            deferred1_1 = r1;
+            return getStringFromWasm0(r0, r1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export4(deferred1_0, deferred1_1, 1);
+        }
     }
     /**
      * Compute layout from JSON payload (estimate text measurer).
@@ -290,6 +311,29 @@ export class GGRSRenderer {
         } finally {
             wasm.__wbindgen_add_to_stack_pointer(16);
             wasm.__wbindgen_export4(deferred2_0, deferred2_1, 1);
+        }
+    }
+    /**
+     * Get viewport chrome for the current view state.
+     * Uses compute_viewport_chrome() with axis range overrides from ViewState.
+     * Must call initView() and computeSkeleton() first.
+     * Returns LayoutInfo JSON (same format as getViewportChrome).
+     * @returns {string}
+     */
+    getViewChrome() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.ggrsrenderer_getViewChrome(retptr, this.__wbg_ptr);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            deferred1_0 = r0;
+            deferred1_1 = r1;
+            return getStringFromWasm0(r0, r1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export4(deferred1_0, deferred1_1, 1);
         }
     }
     /**
@@ -495,6 +539,19 @@ export class GGRSRenderer {
         }
     }
     /**
+     * Load a chunk of data as a packed binary buffer (no JSON serialization).
+     *
+     * Returns a JS object: { buffer: Uint8Array, done: bool, loaded: number, total: number }
+     * Each point is 16 bytes: [x: f32, y: f32, ci: u32, ri: u32] (little-endian).
+     * NaN points are skipped.
+     * @param {number} chunk_size
+     * @returns {Promise<any>}
+     */
+    loadDataChunkPacked(chunk_size) {
+        const ret = wasm.ggrsrenderer_loadDataChunkPacked(this.__wbg_ptr, chunk_size);
+        return takeObject(ret);
+    }
+    /**
      * Compute layout with viewport filtering + browser text measurement.
      * @param {string} data_json
      * @param {number} width
@@ -602,6 +659,31 @@ export class GGRSRenderer {
         return this;
     }
     /**
+     * Pan visible range. Axis: "x" or "y". delta_pixels: pixel delta from wheel event.
+     * Returns snapshot JSON: { vis_x_min, vis_x_max, vis_y_min, vis_y_max }
+     * @param {string} axis
+     * @param {number} delta_pixels
+     * @returns {string}
+     */
+    pan(axis, delta_pixels) {
+        let deferred2_0;
+        let deferred2_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(axis, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            wasm.ggrsrenderer_pan(retptr, this.__wbg_ptr, ptr0, len0, delta_pixels);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            deferred2_0 = r0;
+            deferred2_1 = r1;
+            return getStringFromWasm0(r0, r1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export4(deferred2_0, deferred2_1, 1);
+        }
+    }
+    /**
      * Get renderer info for debugging
      * @returns {string}
      */
@@ -619,6 +701,57 @@ export class GGRSRenderer {
         } finally {
             wasm.__wbindgen_add_to_stack_pointer(16);
             wasm.__wbindgen_export4(deferred1_0, deferred1_1, 1);
+        }
+    }
+    /**
+     * Zoom visible range. Axis: "x", "y", or "both". Sign: 1 = zoom in, -1 = zoom out.
+     * Returns snapshot JSON: { vis_x_min, vis_x_max, vis_y_min, vis_y_max }
+     * @param {string} axis
+     * @param {number} sign
+     * @returns {string}
+     */
+    zoom(axis, sign) {
+        let deferred2_0;
+        let deferred2_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(axis, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            wasm.ggrsrenderer_zoom(retptr, this.__wbg_ptr, ptr0, len0, sign);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            deferred2_0 = r0;
+            deferred2_1 = r1;
+            return getStringFromWasm0(r0, r1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export4(deferred2_0, deferred2_1, 1);
+        }
+    }
+    /**
+     * Initialize view state with full data ranges and layout geometry.
+     * Must be called after computeSkeleton() and initPlotStream().
+     *
+     * Returns snapshot JSON: { vis_x_min, vis_x_max, vis_y_min, vis_y_max }
+     * @param {string} params_json
+     * @returns {string}
+     */
+    initView(params_json) {
+        let deferred2_0;
+        let deferred2_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(params_json, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            wasm.ggrsrenderer_initView(retptr, this.__wbg_ptr, ptr0, len0);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            deferred2_0 = r0;
+            deferred2_1 = r1;
+            return getStringFromWasm0(r0, r1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export4(deferred2_0, deferred2_1, 1);
         }
     }
 }
@@ -786,7 +919,7 @@ function __wbg_get_imports() {
                 const a = state0.a;
                 state0.a = 0;
                 try {
-                    return __wasm_bindgen_func_elem_36361(a, state0.b, arg0, arg1);
+                    return __wasm_bindgen_func_elem_36427(a, state0.b, arg0, arg1);
                 } finally {
                     state0.a = a;
                 }
@@ -828,6 +961,10 @@ function __wbg_get_imports() {
     };
     imports.wbg.__wbg_set_425eb8b710d5beee = function() { return handleError(function (arg0, arg1, arg2, arg3, arg4) {
         getObject(arg0).set(getStringFromWasm0(arg1, arg2), getStringFromWasm0(arg3, arg4));
+    }, arguments) };
+    imports.wbg.__wbg_set_781438a03c0c3c81 = function() { return handleError(function (arg0, arg1, arg2) {
+        const ret = Reflect.set(getObject(arg0), getObject(arg1), getObject(arg2));
+        return ret;
     }, arguments) };
     imports.wbg.__wbg_set_body_8e743242d6076a4f = function(arg0, arg1) {
         getObject(arg0).body = getObject(arg1);
@@ -878,14 +1015,14 @@ function __wbg_get_imports() {
         const ret = getStringFromWasm0(arg0, arg1);
         return addHeapObject(ret);
     };
-    imports.wbg.__wbindgen_cast_69d24e7bda2eee11 = function(arg0, arg1) {
-        // Cast intrinsic for `Closure(Closure { dtor_idx: 147, function: Function { arguments: [Externref], shim_idx: 148, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
-        const ret = makeMutClosure(arg0, arg1, wasm.__wasm_bindgen_func_elem_939, __wasm_bindgen_func_elem_954);
-        return addHeapObject(ret);
-    };
     imports.wbg.__wbindgen_cast_d6cd19b81560fd6e = function(arg0) {
         // Cast intrinsic for `F64 -> Externref`.
         const ret = arg0;
+        return addHeapObject(ret);
+    };
+    imports.wbg.__wbindgen_cast_eb1693fa7a824add = function(arg0, arg1) {
+        // Cast intrinsic for `Closure(Closure { dtor_idx: 153, function: Function { arguments: [Externref], shim_idx: 154, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
+        const ret = makeMutClosure(arg0, arg1, wasm.__wasm_bindgen_func_elem_996, __wasm_bindgen_func_elem_1011);
         return addHeapObject(ret);
     };
     imports.wbg.__wbindgen_object_clone_ref = function(arg0) {

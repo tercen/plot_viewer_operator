@@ -116,6 +116,26 @@ class GgrsInteropV2 {
     );
   }
 
+  // ── V2 view state (zoom/pan in WASM) ─────────────────────────────────────
+
+  /// Initialize WASM ViewState with ranges + layout geometry.
+  /// Also stores the renderer ref in JS container state.
+  /// Returns snapshot JSObject with { vis_x_min, vis_x_max, vis_y_min, vis_y_max }.
+  static JSObject initView(
+      String containerId, JSObject renderer, String paramsJson) {
+    return (web.window as JSObject).callMethodVarArgs<JSObject>(
+      'ggrsV2InitView'.toJS,
+      [containerId.toJS, renderer, paramsJson.toJS],
+    );
+  }
+
+  /// Get viewport chrome from WASM ViewState.
+  /// Returns parsed chrome JSObject (same format as getViewportChrome).
+  static JSObject getViewChrome(String containerId) {
+    return web.window
+        .callMethod<JSObject>('ggrsV2GetViewChrome'.toJS, containerId.toJS);
+  }
+
   // ── V2 scroll / facet viewport ─────────────────────────────────────────
 
   static void setScrollOffset(String containerId, double dx, double dy) {
@@ -148,6 +168,19 @@ class GgrsInteropV2 {
     return result! as JSObject;
   }
 
+  /// Stream all data using packed binary buffers (no JSON serialization).
+  /// Returns JSObject with { cancelled: bool, loaded?: int }.
+  static Future<JSObject> streamAllDataPacked(
+      String containerId, JSObject renderer, int chunkSize,
+      JSObject options) async {
+    final promise = (web.window as JSObject).callMethodVarArgs<JSPromise>(
+      'ggrsV2StreamAllDataPacked'.toJS,
+      [containerId.toJS, renderer, chunkSize.toJS, options],
+    );
+    final result = await promise.toDart;
+    return result! as JSObject;
+  }
+
   /// Cancel any in-flight JS streaming loop for a container.
   static void cancelStreaming(String containerId) {
     web.window.callMethod<JSAny?>(
@@ -159,12 +192,21 @@ class GgrsInteropV2 {
   static void attachInteraction(
     String containerId,
     JSObject renderer,
-    JSObject staticChrome,
-    JSObject vpChrome,
   ) {
     (web.window as JSObject).callMethodVarArgs<JSAny?>(
       'ggrsV2AttachInteraction'.toJS,
-      [containerId.toJS, renderer, staticChrome, vpChrome],
+      [containerId.toJS, renderer],
+    );
+  }
+
+  // ── V2 programmatic zoom (for Flutter zones outside GGRS container) ──────
+
+  /// Zoom from Dart. direction: 'width', 'height', or 'both'.
+  /// sign: 1 = zoom in, -1 = zoom out.
+  static void zoom(String containerId, String direction, int sign) {
+    (web.window as JSObject).callMethodVarArgs<JSAny?>(
+      'ggrsV2Zoom'.toJS,
+      [containerId.toJS, direction.toJS, sign.toJS],
     );
   }
 

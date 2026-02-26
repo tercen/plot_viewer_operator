@@ -1,6 +1,10 @@
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:widget_library/widget_library.dart';
+import '../../services/ggrs_interop_v2.dart';
+import '../../services/ggrs_service_v2.dart';
 import '../providers/plot_state_provider.dart';
 import 'drop_zone.dart';
 import 'ggrs_plot_view.dart';
@@ -27,6 +31,16 @@ class PlotArea extends StatelessWidget {
   static const double _facetDropSize = 36.0; // empty "drop here" zone thickness
   static const double _facetAddSize = 24.0; // narrow "+" zone for adding more
 
+  /// Total height of the column facet area (drop zones + spacing).
+  double _colFacetAreaHeight(PlotStateProvider state) {
+    if (state.colFacetBindings.isEmpty) {
+      return _facetDropSize + AppSpacing.xs;
+    }
+    return _facetAddSize +
+        AppSpacing.xs +
+        state.colFacetBindings.length * (_facetStripSize + AppSpacing.xs);
+  }
+
   @override
   Widget build(BuildContext context) {
     return Consumer<PlotStateProvider>(
@@ -34,11 +48,41 @@ class PlotArea extends StatelessWidget {
         // Calculate left spacer width (row facets + y axis + gaps)
         final leftWidth = _rowFacetsWidth(state) + _axisDropWidth + AppSpacing.xs;
 
-        return Padding(
-          padding: const EdgeInsets.all(AppSpacing.sm),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
+        // Zone boundaries for Shift+wheel zoom (relative to Listener)
+        final topZoneEnd = AppSpacing.sm +
+            _colFacetAreaHeight(state) +
+            _axisDropHeight +
+            AppSpacing.xs;
+        final leftZoneEnd = AppSpacing.sm + leftWidth;
+
+        return Listener(
+          onPointerSignal: (event) {
+            if (event is PointerScrollEvent &&
+                HardwareKeyboard.instance.isShiftPressed) {
+              final pos = event.localPosition;
+              final ggrs = context.read<GgrsServiceV2>();
+              final containerId = ggrs.activeContainerId;
+              if (containerId == null) return;
+
+              // Browser swaps deltaY→deltaX when Shift held
+              final delta = event.scrollDelta.dy != 0
+                  ? event.scrollDelta.dy
+                  : event.scrollDelta.dx;
+              final sign = delta < 0 ? 1 : -1;
+
+              if (pos.dy < topZoneEnd) {
+                GgrsInteropV2.zoom(containerId, 'width', sign);
+              } else if (pos.dx < leftZoneEnd) {
+                GgrsInteropV2.zoom(containerId, 'height', sign);
+              }
+              // Grid area → GGRS JS interaction handler covers it
+            }
+          },
+          child: Padding(
+            padding: const EdgeInsets.all(AppSpacing.sm),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
               // Col facet area (horizontal strips at top, growing upward)
               ..._buildColFacetArea(state, leftWidth),
               // X axis (immediately below col facets, aligned to grid)
@@ -88,6 +132,7 @@ class PlotArea extends StatelessWidget {
               ),
             ],
           ),
+        ),
         );
       },
     );

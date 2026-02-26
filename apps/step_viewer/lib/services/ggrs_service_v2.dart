@@ -26,7 +26,8 @@ class GgrsServiceV2 extends ChangeNotifier {
   GgrsServiceV2();
 
   static const int _chunkSize = 15000;
-  static const int _facetRowBuffer = 2;
+  static const double _minCellHeight = 80.0;
+  static const double _estimatedChromeReserve = 60.0; // top margin + bottom axis
 
   int _renderGeneration = 0;
   RenderPhase _phase = RenderPhase.idle;
@@ -41,8 +42,12 @@ class GgrsServiceV2 extends ChangeNotifier {
   /// Track which containers have an active GPU — keyed by containerId.
   final Set<String> _gpuReady = {};
 
+  /// The most recently rendered container ID (for programmatic zoom from Dart).
+  String? _activeContainerId;
+
   RenderPhase get phase => _phase;
   String? get error => _error;
+  String? get activeContainerId => _activeContainerId;
   bool get isRendering =>
       _phase != RenderPhase.idle && _phase != RenderPhase.complete;
 
@@ -60,6 +65,7 @@ class GgrsServiceV2 extends ChangeNotifier {
     double height,
   ) async {
     final gen = ++_renderGeneration;
+    _activeContainerId = containerId;
     _phase = RenderPhase.chrome;
     _error = null;
     notifyListeners();
@@ -68,10 +74,16 @@ class GgrsServiceV2 extends ChangeNotifier {
     GgrsInteropV2.cancelStreaming(containerId);
 
     try {
+      final sw = Stopwatch()..start();
+      void log(String msg) => debugPrint('[GgrsV2 timing] $msg @ ${sw.elapsedMilliseconds}ms');
+
       // Debounce: collapse rapid state changes
       await Future.delayed(const Duration(milliseconds: 16));
       _checkGen(gen);
+      log('debounce done');
+
       await _ensureWasm(gen);
+      log('WASM ready');
 
       final workflowId = state.workflowId;
       final stepId = state.stepId;
@@ -83,12 +95,14 @@ class GgrsServiceV2 extends ChangeNotifier {
           _renderBindingsChrome(containerId, state, width, height);
         }
         _setPhase(gen, RenderPhase.complete);
+        log('early exit (no Y binding)');
         return;
       }
 
       // Phase 1: Instant chrome (only when no GPU yet)
       if (!_isGpuReady(containerId)) {
         _renderBindingsChrome(containerId, state, width, height);
+        log('phase1 chrome rendered');
         await GgrsInteropV2.yieldFrame();
         _checkGen(gen);
       }
@@ -96,9 +110,11 @@ class GgrsServiceV2 extends ChangeNotifier {
       // CubeQuery
       _setPhase(gen, RenderPhase.cubeQuery);
       final cqResult = await _runCubeQuery(gen, state);
+      log('cubeQuery done  nRows=${cqResult.nRows}');
 
       if (cqResult.nRows == 0) {
         _setPhase(gen, RenderPhase.complete);
+        log('early exit (0 rows)');
         return;
       }
 
@@ -106,6 +122,7 @@ class GgrsServiceV2 extends ChangeNotifier {
       _setPhase(gen, RenderPhase.streaming);
 
       final configJson = _buildInitConfig(cqResult, state);
+      log('initPlotStream START');
       final metadata =
           await GgrsInteropV2.initPlotStream(_renderer!, configJson);
       _checkGen(gen);
@@ -122,23 +139,42 @@ class GgrsServiceV2 extends ChangeNotifier {
           (metadata.getProperty<JSNumber>('y_min'.toJS)).toDartDouble;
       final yMax =
           (metadata.getProperty<JSNumber>('y_max'.toJS)).toDartDouble;
+      final dataXMin =
+          (metadata.getProperty<JSNumber>('data_x_min'.toJS)).toDartDouble;
+      final dataYMin =
+          (metadata.getProperty<JSNumber>('data_y_min'.toJS)).toDartDouble;
+      log('initPlotStream DONE  nRows=${cqResult.nRows} facets=${nColFacets}x$nRowFacets x=[$xMin,$xMax] y=[$yMin,$yMax] data_min=($dataXMin,$dataYMin)');
 
       // Ensure GPU (creates once, resizes on subsequent calls)
       await GgrsInteropV2.ensureGpu(containerId, width, height);
       _gpuReady.add(containerId);
       _checkGen(gen);
+      log('GPU ready');
 
-      // Compute skeleton for panel dimensions (sync WASM call)
+      // Limit visible rows to what fits with reasonable cell height
+      final availableHeight = height - _estimatedChromeReserve;
+      final maxFittingRows =
+          (availableHeight / _minCellHeight).floor().clamp(1, nRowFacets);
+      final nVisibleRows = maxFittingRows;
+      final nVisibleCols = nColFacets;
+
+      // Compute skeleton with viewport limiting visible facet cells
+      final viewportJson = json.encode({
+        'ci_min': 0,
+        'ci_max': nVisibleCols - 1,
+        'ri_min': 0,
+        'ri_max': nVisibleRows - 1,
+      });
       final skeleton = GgrsInteropV2.computeSkeleton(
-        _renderer!, width, height, '', _textMeasurer!,
+        _renderer!, width, height, viewportJson, _textMeasurer!,
       );
 
       // Parse panel grid from skeleton
       final panelGrid =
           skeleton.getProperty<JSObject>('panel_grid'.toJS);
-      final cellWidth =
+      var cellWidth =
           (panelGrid.getProperty<JSNumber>('cell_width'.toJS)).toDartDouble;
-      final cellHeight =
+      var cellHeight =
           (panelGrid.getProperty<JSNumber>('cell_height'.toJS)).toDartDouble;
       final cellSpacing =
           (panelGrid.getProperty<JSNumber>('cell_spacing'.toJS)).toDartDouble;
@@ -147,14 +183,45 @@ class GgrsServiceV2 extends ChangeNotifier {
       final offsetY =
           (panelGrid.getProperty<JSNumber>('offset_y'.toJS)).toDartDouble;
 
+      // Fix bottom overflow: ensure X axis ticks fit within container
+      final panelBottom = offsetY +
+          nVisibleRows * cellHeight +
+          (nVisibleRows - 1) * cellSpacing;
+      final estimatedBottom = panelBottom + 25; // tick marks + tick labels
+      if (estimatedBottom > height) {
+        final overflow = estimatedBottom - height;
+        cellHeight -= overflow / nVisibleRows;
+      }
+      log('skeleton done  cell=${cellWidth.toStringAsFixed(1)}x${cellHeight.toStringAsFixed(1)} offset=(${offsetX.toStringAsFixed(1)},${offsetY.toStringAsFixed(1)}) visibleRows=$nVisibleRows/$nRowFacets');
+
+      // Init WASM ViewState with ranges + layout geometry
+      final initViewParams = json.encode({
+        'full_x_min': xMin,
+        'full_x_max': xMax,
+        'full_y_min': yMin,
+        'full_y_max': yMax,
+        'data_x_min': dataXMin,
+        'data_y_min': dataYMin,
+        'canvas_width': width,
+        'canvas_height': height,
+        'grid_origin_x': offsetX,
+        'grid_origin_y': offsetY,
+        'cell_width': cellWidth,
+        'cell_height': cellHeight,
+        'cell_spacing': cellSpacing,
+        'n_visible_cols': nVisibleCols,
+        'n_visible_rows': nVisibleRows,
+      });
+      GgrsInteropV2.initView(containerId, _renderer!, initViewParams);
+      log('view state initialized');
+
       // Chrome (WASM skeleton → merge in JS → GPU rects + text canvas)
       final staticChrome = GgrsInteropV2.getStaticChrome(_renderer!);
-      final vpChrome = GgrsInteropV2.getViewportChrome(_renderer!, '');
+      final vpChrome = GgrsInteropV2.getViewChrome(containerId);
       GgrsInteropV2.mergeAndSetChrome(containerId, staticChrome, vpChrome);
+      log('chrome merged');
 
       // Panel layout → view uniforms (80 bytes)
-      // n_visible_rows includes buffer for smooth scrolling
-      final nVisibleRows = nRowFacets + _facetRowBuffer;
       final panelParams = <String, Object>{
         'xMin': xMin,
         'xMax': xMax,
@@ -165,33 +232,35 @@ class GgrsServiceV2 extends ChangeNotifier {
         'cellWidth': cellWidth,
         'cellHeight': cellHeight,
         'cellSpacing': cellSpacing,
-        'nVisibleCols': nColFacets,
+        'nVisibleCols': nVisibleCols,
         'nVisibleRows': nVisibleRows,
-        'nActualCols': nColFacets,
-        'nActualRows': nRowFacets,
+        'nActualCols': nVisibleCols,
+        'nActualRows': nVisibleRows,
         'vpColStart': 0,
         'vpRowStart': 0,
       };
       GgrsInteropV2.setPanelLayout(
           containerId, _toJSObject(panelParams));
+      log('panel layout set');
 
-      // Interaction (attaches once, updates chrome refs on re-render)
-      GgrsInteropV2.attachInteraction(
-          containerId, _renderer!, staticChrome, vpChrome);
+      // Interaction (attaches once, updates renderer ref on re-render)
+      GgrsInteropV2.attachInteraction(containerId, _renderer!);
 
       await GgrsInteropV2.yieldFrame();
       _checkGen(gen);
+      log('streamAllData START');
 
-      // DATA STREAMING DISABLED — focusing on chrome/viewport first
-      // final options = _toJSObject(<String, Object>{
-      //   'radius': 2.5,
-      //   'fillColor': 'rgba(0,0,0,0.6)',
-      // });
-      // await GgrsInteropV2.streamAllData(
-      //     containerId, _renderer!, _chunkSize, options);
-      // _checkGen(gen);
+      final options = _toJSObject(<String, Object>{
+        'radius': 2.5,
+        'fillColor': 'rgba(0,0,0,0.6)',
+      });
+      await GgrsInteropV2.streamAllDataPacked(
+          containerId, _renderer!, _chunkSize, options);
+      _checkGen(gen);
+      log('streamAllDataPacked DONE');
 
       _setPhase(gen, RenderPhase.complete);
+      log('render COMPLETE  total=${sw.elapsedMilliseconds}ms');
     } on _CancelledException {
       // New render started — this one is stale
     } catch (e) {

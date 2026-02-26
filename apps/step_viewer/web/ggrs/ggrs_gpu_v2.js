@@ -101,6 +101,17 @@ fn vs_main(
     let nx = select((data_xy.x - v.x_range.x) / x_span, 0.5, abs(x_span) < 1e-15);
     let ny = select((data_xy.y - v.y_range.x) / y_span, 0.5, abs(y_span) < 1e-15);
 
+    // Clip to visible data range (fixed pixel margin for point radius)
+    let margin_x = size / v.cell_size.x;
+    let margin_y = size / v.cell_size.y;
+    if (nx < -margin_x || nx > 1.0 + margin_x || ny < -margin_y || ny > 1.0 + margin_y) {
+        var clip_out: VertexOutput;
+        clip_out.position = vec4f(2.0, 2.0, 0.0, 1.0);  // off-screen (NDC > 1.0)
+        clip_out.uv = vec2f(0.0);
+        clip_out.color = vec4f(0.0);
+        return clip_out;
+    }
+
     // Panel origin in pixel space (with smooth scroll offset)
     let step_x = v.cell_size.x + v.cell_spacing;
     let step_y = v.cell_size.y + v.cell_spacing;
@@ -404,7 +415,6 @@ export class GgrsGpuV2 {
     // ── View uniforms (full 80-byte write) ─────────────────────────────────────
 
     setViewUniforms(params) {
-        console.log('[GPU] setViewUniforms cellW=' + params.cellWidth + ' cellH=' + params.cellHeight + ' nVisCols=' + params.nVisibleCols + ' nVisRows=' + params.nVisibleRows + ' gridOrigin=(' + params.gridOriginX + ',' + params.gridOriginY + ')');
         this.xMin = params.xMin;
         this.xMax = params.xMax;
         this.yMin = params.yMin;
@@ -463,7 +473,6 @@ export class GgrsGpuV2 {
     // ── Cell size (8-byte write — facet zoom) ────────────────────────────────
 
     setCellSize(w, h) {
-        console.log('[GPU] setCellSize w=' + w.toFixed(3) + ' h=' + h.toFixed(3) + ' (was w=' + this.cellWidth.toFixed(3) + ' h=' + this.cellHeight.toFixed(3) + ')');
         this.cellWidth = w;
         this.cellHeight = h;
         this._device.queue.writeBuffer(
@@ -622,6 +631,82 @@ export class GgrsGpuV2 {
             u32View[base + 3] = p.ri;
             u32View[base + 4] = colorPacked;
             f32View[base + 5] = radius;
+        }
+
+        this._device.queue.writeBuffer(
+            current.buffer,
+            current.count * POINT_BYTES_PER_INSTANCE,
+            data
+        );
+        current.count += newCount;
+        this.requestRedraw();
+    }
+
+    /**
+     * Append data points from a packed binary buffer (16 bytes/point from WASM).
+     * Input format: [x:f32, y:f32, ci:u32, ri:u32] per point (little-endian).
+     * Expands to 24 bytes/point by appending colorPacked and radius.
+     * @param {Uint8Array} packedBuffer - Binary buffer from WASM loadDataChunkPacked
+     * @param {Object} options - { fillColor?: string, radius?: number }
+     */
+    appendDataPointsFromBuffer(packedBuffer, options) {
+        if (!packedBuffer || packedBuffer.byteLength === 0) return;
+
+        const PACKED_BYTES = 16;  // x:f32, y:f32, ci:u32, ri:u32
+        const newCount = packedBuffer.byteLength / PACKED_BYTES;
+        if (newCount === 0) return;
+
+        const fillColor = options?.fillColor || 'rgba(0,0,0,0.6)';
+        const radius = options?.radius || 2.5;
+        const [r, g, b, a] = _parseColor(fillColor);
+        const colorPacked = _packColorU32(r, g, b, a);
+
+        // Ensure buffer capacity (same logic as appendDataPoints)
+        if (!this._pointBuffer) {
+            const capacity = Math.max(INITIAL_POINT_CAPACITY, newCount);
+            const buffer = this._device.createBuffer({
+                size: capacity * POINT_BYTES_PER_INSTANCE,
+                usage: BUFFER_USAGE,
+            });
+            this._pointBuffer = { buffer, count: 0, capacity };
+        }
+
+        const current = this._pointBuffer;
+        if (current.count + newCount > current.capacity) {
+            const newCapacity = Math.max(current.capacity * 2, current.count + newCount);
+            const newBuffer = this._device.createBuffer({
+                size: newCapacity * POINT_BYTES_PER_INSTANCE,
+                usage: BUFFER_USAGE,
+            });
+            const encoder = this._device.createCommandEncoder();
+            encoder.copyBufferToBuffer(
+                current.buffer, 0, newBuffer, 0,
+                current.count * POINT_BYTES_PER_INSTANCE
+            );
+            this._device.queue.submit([encoder.finish()]);
+            current.buffer.destroy();
+            current.buffer = newBuffer;
+            current.capacity = newCapacity;
+        }
+
+        // Read packed input as typed views
+        const srcF32 = new Float32Array(packedBuffer.buffer, packedBuffer.byteOffset, newCount * 4);
+        const srcU32 = new Uint32Array(packedBuffer.buffer, packedBuffer.byteOffset, newCount * 4);
+
+        // Build expanded 24-byte-per-point buffer
+        const data = new ArrayBuffer(newCount * POINT_BYTES_PER_INSTANCE);
+        const dstF32 = new Float32Array(data);
+        const dstU32 = new Uint32Array(data);
+
+        for (let i = 0; i < newCount; i++) {
+            const srcBase = i * 4;   // 16 bytes / 4 = 4 u32s per input point
+            const dstBase = i * 6;   // 24 bytes / 4 = 6 u32s per output point
+            dstF32[dstBase + 0] = srcF32[srcBase + 0];  // x
+            dstF32[dstBase + 1] = srcF32[srcBase + 1];  // y
+            dstU32[dstBase + 2] = srcU32[srcBase + 2];  // ci
+            dstU32[dstBase + 3] = srcU32[srcBase + 3];  // ri
+            dstU32[dstBase + 4] = colorPacked;
+            dstF32[dstBase + 5] = radius;
         }
 
         this._device.queue.writeBuffer(

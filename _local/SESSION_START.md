@@ -1,38 +1,45 @@
-# Session Start — 2026-02-24
+# Session Start — 2026-02-25
 
 ## What was done
 
-### Axis Zoom — Data Range Narrowing (two-regime zoom)
+### V2 GPU Named Layers + Interaction + Data Streaming
 
-When zoomed to a single visible facet, further zoom narrows Y/X data range instead of changing facet cell sizes. All 204 ggrs-core + ggrs-wasm tests pass. WASM builds clean.
+Continued from previous session's named-layer plan. Fixed grey-slab bug, implemented facet zoom/scroll interaction, re-enabled data streaming.
 
 **Files changed:**
 
-1. **`ggrs-core/src/layout_info.rs`** — Added `y_min`, `y_max`, `x_min`, `x_max` (all `Option<f64>`, `#[serde(default)]`) to `ViewportFilter`
-2. **`ggrs-core/src/compute_layout.rs`** — `build_scale_caches(generator, viewport)` and `compute_viewport_chrome(..., viewport)` now accept optional viewport; override tick breaks, grid lines, axis_mappings when axis zoom fields present. Added `breaks_to_labels()` helper using `extended_breaks` + `format_break`.
-3. **`ggrs-wasm/src/lib.rs`** — `init_plot_stream` returns `x_min/x_max/y_min/y_max` in metadata JSON. `get_viewport_chrome` parses viewport JSON and passes to compute functions.
-4. **`step_viewer/lib/presentation/providers/plot_state_provider.dart`** — Added `_axisZoomLevel`, `_baseYMin/Max`, `_baseXMin/Max`, computed range getters (`yMinOverride` etc.), `applyZoom(delta, allFacetsFit:)` returns bool for regime detection, `setBaseAxisRanges()`.
-5. **`step_viewer/lib/services/ggrs_service.dart`** — Added `_storeBaseAxisRanges()`, `_renderWithAxisZoom()`, `_handleZoom()`. Zoom callback dispatches to axis or facet zoom. `render()` stores base ranges after `initPlotStream`.
+1. **`apps/step_viewer/web/ggrs/bootstrap_v2.js`**
+   - Removed all `||` fallback defaults for cached theme colors (rule 01-no-fallbacks)
+   - Fixed `_parseColor` to throw on unrecognized color instead of returning gray
+   - Fixed chromeStyle caching: concatenate both `staticChrome` + `vpChrome` arrays before taking `[0]` (empty array is truthy, was blocking fallthrough)
+   - Added `zoomStep()`: below 1px uses 20% of current power of 10; above 1px uses `max(1, sqrt(value))`
+   - Fixed Shift+Wheel: browser swaps deltaY→deltaX when Shift held — now uses `e.deltaY !== 0 ? e.deltaY : e.deltaX`
+   - Removed redundant `getMousePos()` call in wheel handler
+   - Removed all debug `console.log` statements
+   - Changed `_rebuildChromeForZoom` to throw (not silently return) when chromeStyle missing
+
+2. **`apps/step_viewer/lib/services/ggrs_service_v2.dart`**
+   - Uncommented data streaming block (lines 185-191): `streamAllData` with `radius: 2.5`, `fillColor: 'rgba(0,0,0,0.6)'`
 
 ## What needs testing
 
-1. **End-to-end axis zoom against live Tercen**: Load a step, zoom in until single facet visible, verify axis range narrows (tick labels update, grid lines reposition)
-2. **Zoom out transition**: From axis zoom back to facet zoom — verify smooth transition at `axisZoomLevel == 1.0`
-3. **Single-panel plot (no facets)**: Axis zoom should start immediately on first zoom-in
-4. **Existing facet zoom behavior**: Verify unchanged — zoom in/out with many facets still changes cell count
+1. **Theme colors after zoom**: Does `_rebuildChromeForZoom` correctly use WASM theme colors? (grey slab issue was reported but may now be fixed with the array concatenation fix)
+2. **Horizontal zoom via Shift+Wheel on top strip**: Verify the deltaX fix works across browsers
+3. **Zoom at very small cell sizes**: Verify 20% power-of-10 step feels smooth
+4. **Data points after zoom/scroll**: Verify points reproject correctly when cell size changes or scroll offset changes
+5. **Double-click reset**: Verify returns to initial cell sizes and zero scroll
 
 ## Logical next steps
 
-### 1. End-to-end testing against live Tercen
-- Build + copy WASM: `cd ggrs && wasm-pack build crates/ggrs-wasm --target web && cp -r crates/ggrs-wasm/pkg/* ../plot_viewer_operator/apps/step_viewer/web/ggrs/pkg/`
-- Run: `cd apps/step_viewer && flutter run -d chrome --web-port 8080` with Tercen dart-defines
-- Test: Y-only, X+Y, row facets, zoom in/out across both regimes
+### 1. Verify theme colors after zoom
+- Build and test with Grey theme
+- If grey slab persists, inspect what `allGridLines[0]?.color` actually contains
+- Files: `bootstrap_v2.js` lines 362-375
 
-### 2. Axis zoom data re-rendering
-- Currently axis zoom only re-renders chrome (ticks, grid lines). Data points are NOT re-rendered with the narrowed range.
-- Data points still show the full-range pixel mapping — they need to be re-mapped to the narrowed viewport.
-- Options: (a) re-stream data with narrowed axis_mappings pixel coords, (b) apply CSS transform/clip to data canvas
-- Files: `ggrs_service.dart` (`_renderWithAxisZoom`), possibly `bootstrap.js` for canvas transform
+### 2. Cell width extends beyond viewport
+- Initial `cellWidth` from WASM (~1800px) extends past visible container
+- Need to account for label/tick space so cells fit within visible area
+- Files: `bootstrap_v2.js` (`ggrsV2SetPanelLayout`), `ggrs_service_v2.dart` (panel params)
 
 ### 3. Color/shape/size aesthetic bindings
 - Currently only x, y, row_facet, col_facet are wired

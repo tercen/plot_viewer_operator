@@ -87,7 +87,7 @@ function _parseColor(str) {
         return [parseInt(parts[0]) / 255, parseInt(parts[1]) / 255,
                 parseInt(parts[2]) / 255, 1.0];
     }
-    return [0.5, 0.5, 0.5, 1.0];  // gray fallback for unrecognized
+    throw new Error('[GGRS-V2] _parseColor: unrecognized color: ' + JSON.stringify(str));
 }
 
 function _lineToRect(ln) {
@@ -212,6 +212,48 @@ function _buildRectLayerFromBorders(borders) {
     return rects;
 }
 
+// ─── View chrome rebuild (from WASM ViewState) ──────────────────────────────
+
+/**
+ * Rebuild viewport chrome from WASM ViewState. Called on debounce after zoom/pan.
+ * WASM computes_viewport_chrome with axis range overrides → full positioned chrome.
+ * Does NOT touch the 'labels' text layer (title, axis labels, strip labels).
+ */
+function _rebuildViewChrome(containerId) {
+    const state = _containers[containerId];
+    if (!state || !state.renderer) return;
+
+    const json = state.renderer.getViewChrome();
+    const vpChrome = JSON.parse(json);
+    if (vpChrome.error) {
+        console.error('[GGRS-V2] getViewChrome failed:', vpChrome.error);
+        return;
+    }
+
+    const gpu = state.gpu;
+
+    // Viewport chrome layers (geometric, change with zoom)
+    gpu.setLayer('panel_backgrounds',
+        _buildRectLayerFromBackgrounds(vpChrome.panel_backgrounds));
+    gpu.setLayer('grid_lines',
+        _buildRectLayerFromLines(vpChrome.grid_lines));
+    gpu.setLayer('axis_lines',
+        _buildRectLayerFromLines(vpChrome.axis_lines));
+    gpu.setLayer('tick_marks',
+        _buildRectLayerFromLines(vpChrome.tick_marks));
+    gpu.setLayer('panel_borders',
+        _buildRectLayerFromBorders(vpChrome.panel_borders));
+
+    // Tick text (viewport-dependent)
+    const tickTexts = [
+        ...(vpChrome.x_ticks || []),
+        ...(vpChrome.y_ticks || []),
+    ];
+    _setTextLayer(containerId, 'ticks', tickTexts);
+
+    gpu.requestRedraw();
+}
+
 // ─── V2 window exports ─────────────────────────────────────────────────────────
 
 /**
@@ -275,7 +317,6 @@ async function ggrsV2EnsureGpu(containerId, width, height) {
         interactionAttached: false,
         renderer: null,
         textLayers: {},           // name → <canvas> element
-        chromeStyle: null,        // cached from mergeAndSetChrome
         scrollOffsetX: 0,
         scrollOffsetY: 0,
         streamingToken: 0,
@@ -288,16 +329,17 @@ async function ggrsV2EnsureGpu(containerId, width, height) {
 /**
  * Set panel layout — writes full 80-byte view uniform.
  * Called after initPlotStream when panel dimensions are known.
- * Stores initial cell sizes for double-click reset.
  */
 function ggrsV2SetPanelLayout(containerId, params) {
     const state = _containers[containerId];
     if (!state) throw new Error('[GGRS-V2] Not initialized: ' + containerId);
 
     state.panelLayout = { ...params };
-    state.panelLayout.initialCellWidth = params.cellWidth;
-    state.panelLayout.initialCellHeight = params.cellHeight;
     state.gpu.setViewUniforms(params);
+
+    // Reset scroll
+    state.scrollOffsetX = 0;
+    state.scrollOffsetY = 0;
 }
 
 /**
@@ -359,197 +401,6 @@ function ggrsV2MergeAndSetChrome(containerId, staticChrome, vpChrome) {
     ];
     _setTextLayer(containerId, 'ticks', tickTexts);
 
-    // Cache style info for zoom chrome rebuilds
-    state.chromeStyle = {
-        panelFill: vpChrome.panel_backgrounds?.[0]?.fill || '#FFFFFF',
-        borderColor: vpChrome.panel_borders?.[0]?.color || '#D1D5DB',
-        borderWidth: vpChrome.panel_borders?.[0]?.stroke_width || 1,
-    };
-}
-
-/**
- * Compute ticks for a given axis range using WASM.
- * Sync, <1ms. Returns { x_breaks, x_labels, y_breaks, y_labels }.
- */
-function _computeTicks(renderer, xMin, xMax, yMin, yMax) {
-    const json = renderer.computeTicksForRange(xMin, xMax, yMin, yMax);
-    const result = JSON.parse(json);
-    if (result.error) {
-        throw new Error('[GGRS-V2] computeTicksForRange failed: ' + result.error);
-    }
-    return result;
-}
-
-/**
- * Rebuild all geometric chrome layers from current layout params.
- * Called on debounce after zoom changes cell size.
- * Does NOT touch the 'labels' text layer (title, axis labels, strip labels).
- */
-function _rebuildChromeForZoom(containerId) {
-    const state = _containers[containerId];
-    if (!state || !state.panelLayout || !state.renderer) return;
-
-    const gpu = state.gpu;
-    const layout = state.panelLayout;
-    const style = state.chromeStyle || {};
-
-    const originX = layout.gridOriginX;
-    const originY = layout.gridOriginY;
-    const cellW = gpu.cellWidth;
-    const cellH = gpu.cellHeight;
-    const spacing = layout.cellSpacing;
-    const nCols = layout.nActualCols || 1;
-    const nRows = layout.nActualRows || 1;
-
-    const totalW = nCols * cellW + Math.max(0, nCols - 1) * spacing;
-    const totalH = nRows * cellH + Math.max(0, nRows - 1) * spacing;
-
-    const xMin = gpu.xMin, xMax = gpu.xMax;
-    const yMin = gpu.yMin, yMax = gpu.yMax;
-    const xSpan = xMax - xMin;
-    const ySpan = yMax - yMin;
-
-    const ticks = _computeTicks(state.renderer, xMin, xMax, yMin, yMax);
-
-    // ── Panel backgrounds ──
-    const panelFill = _parseColor(style.panelFill || '#FFFFFF');
-    const bgRects = [];
-    for (let c = 0; c < nCols; c++) {
-        for (let r = 0; r < nRows; r++) {
-            bgRects.push({
-                x: originX + c * (cellW + spacing),
-                y: originY + r * (cellH + spacing),
-                width: cellW, height: cellH, color: panelFill,
-            });
-        }
-    }
-    gpu.setLayer('panel_backgrounds', bgRects);
-
-    // ── Grid lines (skip when cells too small to see) ──
-    const gridRects = [];
-    if (cellW > 5 || cellH > 5) {
-        const gc = _parseColor('#E5E7EB');
-        for (let c = 0; c < nCols; c++) {
-            for (let r = 0; r < nRows; r++) {
-                const px = originX + c * (cellW + spacing);
-                const py = originY + r * (cellH + spacing);
-                if (cellW > 5 && xSpan > 1e-15) {
-                    for (const xb of ticks.x_breaks) {
-                        const nx = (xb - xMin) / xSpan;
-                        if (nx >= 0 && nx <= 1) {
-                            gridRects.push({ x: px + nx * cellW - 0.5, y: py, width: 1, height: cellH, color: gc });
-                        }
-                    }
-                }
-                if (cellH > 5 && ySpan > 1e-15) {
-                    for (const yb of ticks.y_breaks) {
-                        const ny = (yb - yMin) / ySpan;
-                        if (ny >= 0 && ny <= 1) {
-                            gridRects.push({ x: px, y: py + (1 - ny) * cellH - 0.5, width: cellW, height: 1, color: gc });
-                        }
-                    }
-                }
-            }
-        }
-    }
-    gpu.setLayer('grid_lines', gridRects);
-
-    // ── Axis lines ──
-    const ac = _parseColor('#374151');
-    gpu.setLayer('axis_lines', [
-        { x: originX, y: originY + totalH, width: totalW, height: 1, color: ac },
-        { x: originX - 1, y: originY, width: 1, height: totalH, color: ac },
-    ]);
-
-    // ── Tick marks (bottom row for X, left column for Y — same as WASM) ──
-    const tickRects = [];
-    // X tick marks: bottom of each cell in the last row only
-    if (xSpan > 1e-15) {
-        const bottomRow = nRows - 1;
-        for (let c = 0; c < nCols; c++) {
-            const px = originX + c * (cellW + spacing);
-            const py = originY + bottomRow * (cellH + spacing);
-            for (const xb of ticks.x_breaks) {
-                const nx = (xb - xMin) / xSpan;
-                if (nx >= 0 && nx <= 1) {
-                    tickRects.push({ x: px + nx * cellW - 0.5, y: py + cellH, width: 1, height: 5, color: ac });
-                }
-            }
-        }
-    }
-    // Y tick marks: left of each cell in the first column only
-    if (ySpan > 1e-15 && cellH >= 20) {
-        for (let r = 0; r < nRows; r++) {
-            const py = originY + r * (cellH + spacing);
-            for (const yb of ticks.y_breaks) {
-                const ny = (yb - yMin) / ySpan;
-                if (ny >= 0 && ny <= 1) {
-                    tickRects.push({ x: originX - 5, y: py + (1 - ny) * cellH - 0.5, width: 5, height: 1, color: ac });
-                }
-            }
-        }
-    }
-    gpu.setLayer('tick_marks', tickRects);
-
-    // ── Panel borders ──
-    const bc = _parseColor(style.borderColor || '#D1D5DB');
-    const bw = style.borderWidth || 1;
-    const borderRects = [];
-    for (let c = 0; c < nCols; c++) {
-        for (let r = 0; r < nRows; r++) {
-            const px = originX + c * (cellW + spacing);
-            const py = originY + r * (cellH + spacing);
-            borderRects.push({ x: px, y: py, width: cellW, height: bw, color: bc });
-            borderRects.push({ x: px, y: py + cellH - bw, width: cellW, height: bw, color: bc });
-            borderRects.push({ x: px, y: py + bw, width: bw, height: cellH - 2 * bw, color: bc });
-            borderRects.push({ x: px + cellW - bw, y: py + bw, width: bw, height: cellH - 2 * bw, color: bc });
-        }
-    }
-    gpu.setLayer('panel_borders', borderRects);
-
-    // ── Tick labels (bottom row for X, left column for Y — same as WASM) ──
-    const tickTexts = [];
-    // X tick labels: below the last row only
-    if (xSpan > 1e-15) {
-        const bottomRow = nRows - 1;
-        for (let c = 0; c < nCols; c++) {
-            const px = originX + c * (cellW + spacing);
-            const py = originY + bottomRow * (cellH + spacing);
-            for (let i = 0; i < ticks.x_breaks.length; i++) {
-                const nx = (ticks.x_breaks[i] - xMin) / xSpan;
-                if (nx >= -0.05 && nx <= 1.05) {
-                    tickTexts.push({
-                        text: ticks.x_labels[i],
-                        x: px + nx * cellW, y: py + cellH + 12,
-                        font_size: 11, font_family: 'Fira Sans, sans-serif',
-                        font_weight: 'normal', color: '#374151',
-                        anchor: 'middle', baseline: 'auto',
-                    });
-                }
-            }
-        }
-    }
-    // Y tick labels: left of first column only, when cell tall enough
-    if (ySpan > 1e-15 && cellH >= 20) {
-        for (let r = 0; r < nRows; r++) {
-            const py = originY + r * (cellH + spacing);
-            for (let i = 0; i < ticks.y_breaks.length; i++) {
-                const ny = (ticks.y_breaks[i] - yMin) / ySpan;
-                if (ny >= -0.05 && ny <= 1.05) {
-                    tickTexts.push({
-                        text: ticks.y_labels[i],
-                        x: originX - 8, y: py + (1 - ny) * cellH,
-                        font_size: 11, font_family: 'Fira Sans, sans-serif',
-                        font_weight: 'normal', color: '#374151',
-                        anchor: 'end', baseline: 'central',
-                    });
-                }
-            }
-        }
-    }
-    _setTextLayer(containerId, 'ticks', tickTexts);
-
-    gpu.requestRedraw();
 }
 
 /**
@@ -571,14 +422,22 @@ function ggrsV2ClearDataPoints(containerId) {
 }
 
 /**
- * Attach zoom interaction. Attach-once: if already attached, just update
+ * Attach interaction handlers. Attach-once: if already attached, just update
  * the renderer ref (no handler re-creation).
  *
- * Zoom = mouse wheel changes cell height. Shift+wheel changes cell width.
- * Double-click resets to initial cell size.
+ * Wheel            → vertical pan (WASM pan → GPU setAxisRange → debounced chrome)
+ * Ctrl+wheel       → horizontal pan
+ * Shift+wheel      → zoom via WASM (zone-dependent):
+ *   - Left strip (x < gridOriginX)  → Y range zoom
+ *   - Top strip  (y < gridOriginY)  → X range zoom
+ *   - Inside grid                    → both
+ * Double-click     → reset to full data range (WASM resetView)
+ *
+ * Data points reproject instantly via GPU uniform write.
+ * Chrome rebuilds on 150ms debounce via WASM getViewChrome().
  *
  * @param {string} containerId
- * @param {Object} renderer - WASM GGRSRenderer (for computeTicksForRange)
+ * @param {Object} renderer - WASM GGRSRenderer
  */
 function ggrsV2AttachInteraction(containerId, renderer) {
     const state = _containers[containerId];
@@ -595,51 +454,62 @@ function ggrsV2AttachInteraction(containerId, renderer) {
     if (!interactionDiv) throw new Error('[GGRS-V2] Interaction div not found');
 
     const gpu = state.gpu;
-    let rebuildTimer = null;
 
-    function scheduleRebuild() {
-        clearTimeout(rebuildTimer);
-        rebuildTimer = setTimeout(() => _rebuildChromeForZoom(containerId), 6);
+    let chromeTimer = null;
+    const CHROME_DEBOUNCE = 150; // ms
+
+    function applySnapshot(snapshot) {
+        gpu.setAxisRange(snapshot.vis_x_min, snapshot.vis_x_max,
+                         snapshot.vis_y_min, snapshot.vis_y_max);
     }
 
-    // ── Facet zoom: wheel ──────────────────────────────────────────────────
+    function scheduleChromeRebuild() {
+        clearTimeout(chromeTimer);
+        chromeTimer = setTimeout(() => _rebuildViewChrome(containerId), CHROME_DEBOUNCE);
+    }
+
+    function getMousePos(e) {
+        const rect = interactionDiv.getBoundingClientRect();
+        return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+    }
+
+    // ── Wheel handler ─────────────────────────────────────────────────────
 
     function onWheel(e) {
         e.preventDefault();
-        const sign = e.deltaY < 0 ? 1 : -1;  // scroll up = zoom in = bigger
-
-        const oldW = gpu.cellWidth;
-        const oldH = gpu.cellHeight;
+        const pos = getMousePos(e);
+        let snapshot;
 
         if (e.shiftKey) {
-            // Shift+wheel → cell width (X zoom)
-            const step = Math.max(1, Math.sqrt(gpu.cellWidth));
-            const newW = Math.max(0.001, gpu.cellWidth + step * sign);
-            gpu.setCellSize(newW, gpu.cellHeight);
-            state.panelLayout.cellWidth = newW;
-            console.log('[ZOOM] shift+wheel deltaY=' + e.deltaY + ' sign=' + sign + ' oldW=' + oldW.toFixed(3) + ' step=' + step.toFixed(3) + ' newW=' + newW.toFixed(3));
+            // Shift+wheel → zoom (zone-dependent)
+            // Browser may swap deltaY→deltaX when Shift is held
+            const delta = e.deltaY !== 0 ? e.deltaY : e.deltaX;
+            const sign = delta < 0 ? 1 : -1;
+            const originX = gpu.gridOriginX;
+            const originY = gpu.gridOriginY;
+
+            const axis = (pos.x < originX) ? 'y'
+                       : (pos.y < originY) ? 'x' : 'both';
+            snapshot = JSON.parse(state.renderer.zoom(axis, sign));
+        } else if (e.ctrlKey || e.metaKey) {
+            // Ctrl+wheel → horizontal pan
+            snapshot = JSON.parse(state.renderer.pan('x', e.deltaY));
         } else {
-            // Wheel → cell height (Y zoom)
-            const step = Math.max(1, Math.sqrt(gpu.cellHeight));
-            const newH = Math.max(0.001, gpu.cellHeight + step * sign);
-            gpu.setCellSize(gpu.cellWidth, newH);
-            state.panelLayout.cellHeight = newH;
-            console.log('[ZOOM] wheel deltaY=' + e.deltaY + ' sign=' + sign + ' oldH=' + oldH.toFixed(3) + ' step=' + step.toFixed(3) + ' newH=' + newH.toFixed(3));
+            // Wheel → vertical pan
+            snapshot = JSON.parse(state.renderer.pan('y', e.deltaY));
         }
 
-        scheduleRebuild();
+        applySnapshot(snapshot);
+        scheduleChromeRebuild();
     }
 
-    // ── Double-click: reset cell size ──────────────────────────────────────
+    // ── Double-click: reset to full range ─────────────────────────────────
 
     function onDblClick() {
-        if (state.panelLayout) {
-            const layout = state.panelLayout;
-            gpu.setCellSize(layout.initialCellWidth, layout.initialCellHeight);
-            layout.cellWidth = layout.initialCellWidth;
-            layout.cellHeight = layout.initialCellHeight;
-            scheduleRebuild();
-        }
+        const snapshot = JSON.parse(state.renderer.resetView());
+        applySnapshot(snapshot);
+        clearTimeout(chromeTimer);
+        _rebuildViewChrome(containerId);
     }
 
     interactionDiv.addEventListener('wheel', onWheel, { passive: false });
@@ -648,7 +518,7 @@ function ggrsV2AttachInteraction(containerId, renderer) {
     state.interactionCleanup = () => {
         interactionDiv.removeEventListener('wheel', onWheel);
         interactionDiv.removeEventListener('dblclick', onDblClick);
-        clearTimeout(rebuildTimer);
+        clearTimeout(chromeTimer);
         state.interactionAttached = false;
     };
 }
@@ -697,24 +567,108 @@ async function ggrsV2StreamAllData(containerId, renderer, chunkSize, options) {
     // Clear old data points before streaming new ones
     state.gpu.clearDataPoints();
 
+    const t0 = performance.now();
     let totalLoaded = 0;
+    let chunkIndex = 0;
+    console.log(`[GGRS-V2 timing] streamAllData START  chunkSize=${chunkSize}`);
+
     while (true) {
-        if (state.streamingToken !== token) return { cancelled: true };
-
-        const json = await renderer.loadDataChunk(chunkSize);
-        const result = JSON.parse(json);
-        if (result.error) throw new Error('[GGRS-V2] loadDataChunk: ' + result.error);
-
-        if (state.streamingToken !== token) return { cancelled: true };
-
-        if (result.points && result.points.length > 0) {
-            state.gpu.appendDataPoints(result.points, options);
-            totalLoaded += result.points.length;
+        if (state.streamingToken !== token) {
+            console.log(`[GGRS-V2 timing] streamAllData CANCELLED after ${chunkIndex} chunks, ${totalLoaded} pts, ${(performance.now()-t0).toFixed(1)}ms`);
+            return { cancelled: true };
         }
 
-        if (result.done) return { cancelled: false, loaded: totalLoaded };
+        const tChunk = performance.now();
+        const json = await renderer.loadDataChunk(chunkSize);
+        const tWasm = performance.now();
+        const result = JSON.parse(json);
+        const tParse = performance.now();
+        if (result.error) throw new Error('[GGRS-V2] loadDataChunk: ' + result.error);
 
+        if (state.streamingToken !== token) {
+            console.log(`[GGRS-V2 timing] streamAllData CANCELLED after ${chunkIndex} chunks, ${totalLoaded} pts, ${(performance.now()-t0).toFixed(1)}ms`);
+            return { cancelled: true };
+        }
+
+        const nPts = result.points ? result.points.length : 0;
+        let tGpu = tParse;
+        if (nPts > 0) {
+            state.gpu.appendDataPoints(result.points, options);
+            tGpu = performance.now();
+            totalLoaded += nPts;
+        }
+
+        console.log(`[GGRS-V2 timing] chunk[${chunkIndex}]: ${nPts} pts  wasm=${(tWasm-tChunk).toFixed(1)}ms  parse=${(tParse-tWasm).toFixed(1)}ms  gpu=${(tGpu-tParse).toFixed(1)}ms  total=${(tGpu-tChunk).toFixed(1)}ms  cumPts=${totalLoaded}`);
+
+        if (result.done) {
+            const elapsed = performance.now() - t0;
+            console.log(`[GGRS-V2 timing] streamAllData DONE  ${chunkIndex+1} chunks, ${totalLoaded} pts, ${elapsed.toFixed(1)}ms  (${totalLoaded > 0 ? (totalLoaded / elapsed * 1000).toFixed(0) : 0} pts/s)`);
+            return { cancelled: false, loaded: totalLoaded };
+        }
+
+        const tFrame = performance.now();
         await new Promise(resolve => requestAnimationFrame(resolve));
+        const tAfterFrame = performance.now();
+        console.log(`[GGRS-V2 timing] chunk[${chunkIndex}] frame yield: ${(tAfterFrame-tFrame).toFixed(1)}ms`);
+
+        chunkIndex++;
+    }
+}
+
+/**
+ * Stream all data using packed binary buffers (no JSON serialization).
+ * Uses loadDataChunkPacked (Uint8Array, 16 bytes/point) instead of loadDataChunk (JSON string).
+ */
+async function ggrsV2StreamAllDataPacked(containerId, renderer, chunkSize, options) {
+    const state = _containers[containerId];
+    if (!state) throw new Error('[GGRS-V2] Not initialized: ' + containerId);
+    const token = ++state.streamingToken;
+
+    state.gpu.clearDataPoints();
+
+    const t0 = performance.now();
+    let totalLoaded = 0;
+    let chunkIndex = 0;
+    console.log(`[GGRS-V2 timing] streamAllDataPacked START  chunkSize=${chunkSize}`);
+
+    while (true) {
+        if (state.streamingToken !== token) {
+            console.log(`[GGRS-V2 timing] streamAllDataPacked CANCELLED after ${chunkIndex} chunks, ${totalLoaded} pts, ${(performance.now()-t0).toFixed(1)}ms`);
+            return { cancelled: true };
+        }
+
+        const tChunk = performance.now();
+        const result = await renderer.loadDataChunkPacked(chunkSize);
+        const tWasm = performance.now();
+        if (result.error) throw new Error('[GGRS-V2] loadDataChunkPacked: ' + result.error);
+
+        if (state.streamingToken !== token) {
+            console.log(`[GGRS-V2 timing] streamAllDataPacked CANCELLED after ${chunkIndex} chunks, ${totalLoaded} pts, ${(performance.now()-t0).toFixed(1)}ms`);
+            return { cancelled: true };
+        }
+
+        const nPts = result.buffer ? result.buffer.byteLength / 16 : 0;
+        let tGpu = tWasm;
+        if (nPts > 0) {
+            state.gpu.appendDataPointsFromBuffer(result.buffer, options);
+            tGpu = performance.now();
+            totalLoaded += nPts;
+        }
+
+        console.log(`[GGRS-V2 timing] chunk[${chunkIndex}]: ${nPts} pts  wasm=${(tWasm-tChunk).toFixed(1)}ms  gpu=${(tGpu-tWasm).toFixed(1)}ms  total=${(tGpu-tChunk).toFixed(1)}ms  cumPts=${totalLoaded}`);
+
+        if (result.done) {
+            const elapsed = performance.now() - t0;
+            console.log(`[GGRS-V2 timing] streamAllDataPacked DONE  ${chunkIndex+1} chunks, ${totalLoaded} pts, ${elapsed.toFixed(1)}ms  (${totalLoaded > 0 ? (totalLoaded / elapsed * 1000).toFixed(0) : 0} pts/s)`);
+            return { cancelled: false, loaded: totalLoaded };
+        }
+
+        const tFrame = performance.now();
+        await new Promise(resolve => requestAnimationFrame(resolve));
+        const tAfterFrame = performance.now();
+        console.log(`[GGRS-V2 timing] chunk[${chunkIndex}] frame yield: ${(tAfterFrame-tFrame).toFixed(1)}ms`);
+
+        chunkIndex++;
     }
 }
 
@@ -740,10 +694,47 @@ window.ggrsV2AppendDataPoints = ggrsV2AppendDataPoints;
 window.ggrsV2ClearDataPoints = ggrsV2ClearDataPoints;
 window.ggrsV2LoadDataChunk = ggrsV2LoadDataChunk;
 window.ggrsV2StreamAllData = ggrsV2StreamAllData;
+window.ggrsV2StreamAllDataPacked = ggrsV2StreamAllDataPacked;
 window.ggrsV2CancelStreaming = ggrsV2CancelStreaming;
 
 // V2 interaction
 window.ggrsV2AttachInteraction = ggrsV2AttachInteraction;
+
+// V2 init view state in WASM (called from Dart after skeleton + initPlotStream)
+// Also stores renderer ref in container state for subsequent calls.
+window.ggrsV2InitView = function(containerId, renderer, paramsJson) {
+    const state = _containers[containerId];
+    if (!state) {
+        throw new Error('[GGRS-V2] Cannot initView: container not initialized: ' + containerId);
+    }
+    state.renderer = renderer;
+    const snapshot = JSON.parse(renderer.initView(paramsJson));
+    return snapshot;
+};
+
+// V2 get view chrome from WASM ViewState (called from Dart for initial chrome)
+window.ggrsV2GetViewChrome = function(containerId) {
+    const state = _containers[containerId];
+    if (!state || !state.renderer) {
+        throw new Error('[GGRS-V2] Cannot getViewChrome: container not ready: ' + containerId);
+    }
+    const json = state.renderer.getViewChrome();
+    return JSON.parse(json);
+};
+
+// V2 programmatic zoom (called from Dart for Flutter drop zones outside GGRS)
+// direction: 'width', 'height', or 'both'. sign: 1 = zoom in, -1 = zoom out.
+window.ggrsV2Zoom = function(containerId, direction, sign) {
+    const state = _containers[containerId];
+    if (!state || !state.gpu || !state.renderer) {
+        throw new Error('[GGRS-V2] Cannot zoom: container not ready: ' + containerId);
+    }
+    const axis = direction === 'width' ? 'x' : direction === 'height' ? 'y' : 'both';
+    const snapshot = JSON.parse(state.renderer.zoom(axis, sign));
+    state.gpu.setAxisRange(snapshot.vis_x_min, snapshot.vis_x_max,
+                           snapshot.vis_y_min, snapshot.vis_y_max);
+    _rebuildViewChrome(containerId);
+};
 
 // V2 scroll / facet viewport
 window.ggrsV2SetScrollOffset = function(containerId, dx, dy) {
