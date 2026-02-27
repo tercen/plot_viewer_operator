@@ -12,10 +12,11 @@
 
 // ─── WGSL Shaders ─────────────────────────────────────────────────────────────
 
-/** Chrome rect shader — pixel-space, no view transform. */
+/** Chrome rect shader — surface-space, scroll_offset subtracted for screen position. */
 const RECT_SHADER_V2 = /* wgsl */`
 struct RectUniforms {
-    canvas_size: vec2f,
+    canvas_size: vec2f,     // offset 0, 8 bytes
+    scroll_offset: vec2f,   // offset 8, 8 bytes — total surface scroll
 }
 @group(0) @binding(0) var<uniform> u: RectUniforms;
 
@@ -32,7 +33,7 @@ fn vs_main(
     @location(2) color: vec4f,
 ) -> VertexOutput {
     let corner = vec2f(f32(vi & 1u), f32((vi >> 1u) & 1u));
-    let pos = rect_pos + corner * rect_size;
+    let pos = rect_pos + corner * rect_size - u.scroll_offset;
     let ndc = vec2f(
         pos.x / u.canvas_size.x * 2.0 - 1.0,
         1.0 - pos.y / u.canvas_size.y * 2.0,
@@ -482,6 +483,18 @@ export class GgrsGpuV2 {
         this.requestRedraw();
     }
 
+    // ── Visible counts (8-byte write — multi-facet zoom) ─────────────────────
+
+    setVisibleCounts(cols, rows) {
+        this.nVisibleCols = cols;
+        this.nVisibleRows = rows;
+        this._device.queue.writeBuffer(
+            this._viewUniformBuffer, 44,  // offset 44 = n_visible_cols (u32), n_visible_rows (u32)
+            new Uint32Array([cols, rows])
+        );
+        this.requestRedraw();
+    }
+
     // ── Scroll offset (8-byte write — smooth facet scrolling) ───────────────
 
     setScrollOffset(dx, dy) {
@@ -498,6 +511,16 @@ export class GgrsGpuV2 {
         this._device.queue.writeBuffer(
             this._viewUniformBuffer, 52,  // offset 52 = viewport_col_start
             new Uint32Array([colStart, rowStart])
+        );
+        this.requestRedraw();
+    }
+
+    // ── Rect scroll (8-byte write — V3 surface scroll for chrome) ─────────────
+
+    setRectScroll(x, y) {
+        this._device.queue.writeBuffer(
+            this._rectUniformBuffer, 8,  // offset 8 = scroll_offset
+            new Float32Array([x, y])
         );
         this.requestRedraw();
     }

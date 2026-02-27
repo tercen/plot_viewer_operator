@@ -102,12 +102,8 @@ class GgrsInteropV2 {
         'ggrsV2SetPanelLayout'.toJS, containerId.toJS, params);
   }
 
-  static void setChromeFromLayout(String containerId, JSObject layoutInfo) {
-    web.window.callMethod<JSAny?>(
-        'ggrsV2SetChromeFromLayout'.toJS, containerId.toJS, layoutInfo);
-  }
-
   /// Merge static + viewport chrome in JS (no Dart serialization).
+  /// Kept for backward compatibility — V3 uses setChrome() instead.
   static void mergeAndSetChrome(
       String containerId, JSObject staticChrome, JSObject vpChrome) {
     (web.window as JSObject).callMethodVarArgs<JSAny?>(
@@ -116,11 +112,11 @@ class GgrsInteropV2 {
     );
   }
 
-  // ── V2 view state (zoom/pan in WASM) ─────────────────────────────────────
+  // ── V2/V3 view state ────────────────────────────────────────────────────
 
-  /// Initialize WASM ViewState with ranges + layout geometry.
+  /// Initialize WASM ViewState with layout geometry and data ranges.
   /// Also stores the renderer ref in JS container state.
-  /// Returns snapshot JSObject with { vis_x_min, vis_x_max, vis_y_min, vis_y_max }.
+  /// Returns snapshot JSObject.
   static JSObject initView(
       String containerId, JSObject renderer, String paramsJson) {
     return (web.window as JSObject).callMethodVarArgs<JSObject>(
@@ -129,28 +125,11 @@ class GgrsInteropV2 {
     );
   }
 
-  /// Get viewport chrome from WASM ViewState.
-  /// Returns parsed chrome JSObject (same format as getViewportChrome).
-  static JSObject getViewChrome(String containerId) {
-    return web.window
-        .callMethod<JSObject>('ggrsV2GetViewChrome'.toJS, containerId.toJS);
-  }
-
-  // ── V2 scroll / facet viewport ─────────────────────────────────────────
-
-  static void setScrollOffset(String containerId, double dx, double dy) {
-    (web.window as JSObject).callMethodVarArgs<JSAny?>(
-      'ggrsV2SetScrollOffset'.toJS,
-      [containerId.toJS, dx.toJS, dy.toJS],
-    );
-  }
-
-  static void setFacetViewport(
-      String containerId, int colStart, int rowStart) {
-    (web.window as JSObject).callMethodVarArgs<JSAny?>(
-      'ggrsV2SetFacetViewport'.toJS,
-      [containerId.toJS, colStart.toJS, rowStart.toJS],
-    );
+  /// Set chrome from WASM merged getViewChrome (V3).
+  /// Calls _rebuildViewChrome internally in JS.
+  static void setChrome(String containerId) {
+    web.window
+        .callMethod<JSAny?>('ggrsV2SetChrome'.toJS, containerId.toJS);
   }
 
   // ── V2 data streaming ─────────────────────────────────────────────────────

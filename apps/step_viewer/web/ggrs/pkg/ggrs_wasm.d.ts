@@ -5,10 +5,22 @@ export class GGRSRenderer {
   free(): void;
   [Symbol.dispose](): void;
   /**
+   * Reset visible range to full data range.
+   * Returns snapshot JSON: { vis_x_min, vis_x_max, vis_y_min, vis_y_max }
+   */
+  resetView(): string;
+  /**
    * Compute layout from JSON payload (estimate text measurer).
    * Used for Phase 1 instant chrome — no Tercen connection needed.
    */
   computeLayout(data_json: string, width: number, height: number): string;
+  /**
+   * Get viewport chrome for the current view state.
+   * Uses compute_viewport_chrome() with axis range overrides from ViewState.
+   * Must call initView() and computeSkeleton() first.
+   * Returns LayoutInfo JSON (same format as getViewportChrome).
+   */
+  getViewChrome(): string;
   /**
    * Load a chunk of data and return data-space coordinates (no pixel mapping).
    *
@@ -106,6 +118,14 @@ export class GGRSRenderer {
    */
   getViewportChrome(viewport_json: string): string;
   /**
+   * Load a chunk of data as a packed binary buffer (no JSON serialization).
+   *
+   * Returns a JS object: { buffer: Uint8Array, done: bool, loaded: number, total: number }
+   * Each point is 16 bytes: [x: f32, y: f32, ci: u32, ri: u32] (little-endian).
+   * NaN points are skipped.
+   */
+  loadDataChunkPacked(chunk_size: number): Promise<any>;
+  /**
    * Compute layout with viewport filtering + browser text measurement.
    */
   computeLayoutViewport(data_json: string, width: number, height: number, viewport_json: string, measure_text_fn: Function): string;
@@ -136,9 +156,26 @@ export class GGRSRenderer {
    */
   constructor(canvas_id: string);
   /**
+   * Pan visible range. Axis: "x" or "y". delta_pixels: pixel delta from wheel event.
+   * Returns snapshot JSON: { vis_x_min, vis_x_max, vis_y_min, vis_y_max }
+   */
+  pan(axis: string, delta_pixels: number): string;
+  /**
    * Get renderer info for debugging
    */
   info(): string;
+  /**
+   * Zoom visible range. Axis: "x", "y", or "both". Sign: 1 = zoom in, -1 = zoom out.
+   * Returns snapshot JSON: { vis_x_min, vis_x_max, vis_y_min, vis_y_max }
+   */
+  zoom(axis: string, sign: number): string;
+  /**
+   * Initialize view state with full data ranges and layout geometry.
+   * Must be called after computeSkeleton() and initPlotStream().
+   *
+   * Returns snapshot JSON: { vis_x_min, vis_x_max, vis_y_min, vis_y_max }
+   */
+  initView(params_json: string): string;
 }
 
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
@@ -153,16 +190,22 @@ export interface InitOutput {
   readonly ggrsrenderer_computeTicksForRange: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
   readonly ggrsrenderer_getStaticChrome: (a: number, b: number) => void;
   readonly ggrsrenderer_getStreamLayout: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
+  readonly ggrsrenderer_getViewChrome: (a: number, b: number) => void;
   readonly ggrsrenderer_getViewportChrome: (a: number, b: number, c: number, d: number) => void;
   readonly ggrsrenderer_info: (a: number, b: number) => void;
   readonly ggrsrenderer_initPlotStream: (a: number, b: number, c: number) => number;
+  readonly ggrsrenderer_initView: (a: number, b: number, c: number, d: number) => void;
   readonly ggrsrenderer_initializeTercen: (a: number, b: number, c: number, d: number, e: number) => void;
   readonly ggrsrenderer_loadAndMapChunk: (a: number, b: number) => number;
   readonly ggrsrenderer_loadDataChunk: (a: number, b: number) => number;
+  readonly ggrsrenderer_loadDataChunkPacked: (a: number, b: number) => number;
   readonly ggrsrenderer_new: (a: number, b: number) => number;
-  readonly __wasm_bindgen_func_elem_954: (a: number, b: number, c: number) => void;
-  readonly __wasm_bindgen_func_elem_939: (a: number, b: number) => void;
-  readonly __wasm_bindgen_func_elem_36361: (a: number, b: number, c: number, d: number) => void;
+  readonly ggrsrenderer_pan: (a: number, b: number, c: number, d: number, e: number) => void;
+  readonly ggrsrenderer_resetView: (a: number, b: number) => void;
+  readonly ggrsrenderer_zoom: (a: number, b: number, c: number, d: number, e: number) => void;
+  readonly __wasm_bindgen_func_elem_1011: (a: number, b: number, c: number) => void;
+  readonly __wasm_bindgen_func_elem_996: (a: number, b: number) => void;
+  readonly __wasm_bindgen_func_elem_36428: (a: number, b: number, c: number, d: number) => void;
   readonly __wbindgen_export: (a: number, b: number) => number;
   readonly __wbindgen_export2: (a: number, b: number, c: number, d: number) => number;
   readonly __wbindgen_export3: (a: number) => void;

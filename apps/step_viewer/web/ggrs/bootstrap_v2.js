@@ -58,11 +58,12 @@ function _drawTextPlacement(ctx, tp) {
     ctx.restore();
 }
 
-function _drawTextsOnCanvas(canvas, texts, dpr) {
+function _drawTextsOnCanvas(canvas, texts, dpr, scrollX, scrollY) {
     const ctx = canvas.getContext('2d');
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.translate(-(scrollX || 0), -(scrollY || 0));  // surface → screen
     for (const tp of texts) {
         _drawTextPlacement(ctx, tp);
     }
@@ -160,8 +161,11 @@ function _setTextLayer(containerId, name, textPlacements) {
         state.textLayers[name] = canvas;
     }
 
-    // Clear and redraw
-    _drawTextsOnCanvas(canvas, textPlacements || [], dpr);
+    // Cache placements for scroll redraws
+    state.textPlacementCache[name] = textPlacements || [];
+
+    // Clear and redraw with current scroll
+    _drawTextsOnCanvas(canvas, textPlacements || [], dpr, state.scrollX, state.scrollY);
 }
 
 /**
@@ -175,6 +179,22 @@ function _clearTextLayer(containerId, name) {
     const ctx = canvas.getContext('2d');
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, canvas.width, canvas.height);
+}
+
+/**
+ * Redraw all cached text layers with the current scroll offset.
+ * Called on scroll events between chrome recomputes for instant text updates.
+ */
+function _redrawTextWithScroll(containerId) {
+    const state = _containers[containerId];
+    if (!state) return;
+    const dpr = window.devicePixelRatio || 1;
+    for (const [name, placements] of Object.entries(state.textPlacementCache)) {
+        const canvas = state.textLayers[name];
+        if (canvas && placements) {
+            _drawTextsOnCanvas(canvas, placements, dpr, state.scrollX, state.scrollY);
+        }
+    }
 }
 
 // ─── Per-type rect builders ──────────────────────────────────────────────────
@@ -215,41 +235,54 @@ function _buildRectLayerFromBorders(borders) {
 // ─── View chrome rebuild (from WASM ViewState) ──────────────────────────────
 
 /**
- * Rebuild viewport chrome from WASM ViewState. Called on debounce after zoom/pan.
- * WASM computes_viewport_chrome with axis range overrides → full positioned chrome.
- * Does NOT touch the 'labels' text layer (title, axis labels, strip labels).
+ * Rebuild all chrome from WASM ViewState (V3 merged: static + viewport).
+ * Called on zoom (immediate) and scroll (debounced).
+ * WASM getViewChrome() returns merged chrome with all fields.
  */
 function _rebuildViewChrome(containerId) {
     const state = _containers[containerId];
     if (!state || !state.renderer) return;
 
     const json = state.renderer.getViewChrome();
-    const vpChrome = JSON.parse(json);
-    if (vpChrome.error) {
-        console.error('[GGRS-V2] getViewChrome failed:', vpChrome.error);
+    const chrome = JSON.parse(json);
+    if (chrome.error) {
+        console.error('[GGRS-V2] getViewChrome failed:', chrome.error);
         return;
     }
 
     const gpu = state.gpu;
 
-    // Viewport chrome layers (geometric, change with zoom)
-    gpu.setLayer('panel_backgrounds',
-        _buildRectLayerFromBackgrounds(vpChrome.panel_backgrounds));
-    gpu.setLayer('grid_lines',
-        _buildRectLayerFromLines(vpChrome.grid_lines));
-    gpu.setLayer('axis_lines',
-        _buildRectLayerFromLines(vpChrome.axis_lines));
-    gpu.setLayer('tick_marks',
-        _buildRectLayerFromLines(vpChrome.tick_marks));
-    gpu.setLayer('panel_borders',
-        _buildRectLayerFromBorders(vpChrome.panel_borders));
+    // Plot background clear color
+    if (chrome.plot_background) {
+        const [r, g, b, a] = _parseColor(chrome.plot_background);
+        gpu._clearColor = { r, g, b, a };
+    }
 
-    // Tick text (viewport-dependent)
-    const tickTexts = [
-        ...(vpChrome.x_ticks || []),
-        ...(vpChrome.y_ticks || []),
-    ];
-    _setTextLayer(containerId, 'ticks', tickTexts);
+    // Rect layers (surface coords, shader scrolls them)
+    gpu.setLayer('panel_backgrounds',
+        _buildRectLayerFromBackgrounds(chrome.panel_backgrounds));
+    gpu.setLayer('strip_backgrounds',
+        _buildRectLayerFromBackgrounds(chrome.strip_backgrounds));
+    gpu.setLayer('grid_lines',
+        _buildRectLayerFromLines(chrome.grid_lines));
+    gpu.setLayer('axis_lines',
+        _buildRectLayerFromLines(chrome.axis_lines));
+    gpu.setLayer('tick_marks',
+        _buildRectLayerFromLines(chrome.tick_marks));
+    gpu.setLayer('panel_borders',
+        _buildRectLayerFromBorders(chrome.panel_borders));
+
+    // Text layers (surface coords, manual scroll via _drawTextsOnCanvas)
+    const labels = [];
+    if (chrome.title) labels.push(chrome.title);
+    if (chrome.x_label) labels.push(chrome.x_label);
+    if (chrome.y_label) labels.push(chrome.y_label);
+    _setTextLayer(containerId, 'labels', labels);
+    _setTextLayer(containerId, 'strip_labels', chrome.strip_labels || []);
+    _setTextLayer(containerId, 'ticks', [
+        ...(chrome.x_ticks || []),
+        ...(chrome.y_ticks || []),
+    ]);
 
     gpu.requestRedraw();
 }
@@ -317,8 +350,9 @@ async function ggrsV2EnsureGpu(containerId, width, height) {
         interactionAttached: false,
         renderer: null,
         textLayers: {},           // name → <canvas> element
-        scrollOffsetX: 0,
-        scrollOffsetY: 0,
+        textPlacementCache: {},   // name → Array<TextPlacement>
+        scrollX: 0,              // current total scroll (V3)
+        scrollY: 0,
         streamingToken: 0,
     };
 
@@ -338,8 +372,8 @@ function ggrsV2SetPanelLayout(containerId, params) {
     state.gpu.setViewUniforms(params);
 
     // Reset scroll
-    state.scrollOffsetX = 0;
-    state.scrollOffsetY = 0;
+    state.scrollX = 0;
+    state.scrollY = 0;
 }
 
 /**
@@ -387,13 +421,19 @@ function ggrsV2MergeAndSetChrome(containerId, staticChrome, vpChrome) {
         _buildRectLayerFromBorders(vpChrome.panel_borders));
 
     // Text layers (each independent canvas)
+    // Static labels (title, axis labels) — don't change on zoom
     const labelTexts = [];
     if (staticChrome.title) labelTexts.push(staticChrome.title);
     if (staticChrome.x_label) labelTexts.push(staticChrome.x_label);
     if (staticChrome.y_label) labelTexts.push(staticChrome.y_label);
-    for (const sl of staticChrome.strip_labels || []) labelTexts.push(sl);
-    for (const sl of vpChrome.strip_labels || []) labelTexts.push(sl);
     _setTextLayer(containerId, 'labels', labelTexts);
+
+    // Strip labels — change when n_visible changes (multi-facet zoom)
+    const stripLabelTexts = [
+        ...(staticChrome.strip_labels || []),
+        ...(vpChrome.strip_labels || []),
+    ];
+    _setTextLayer(containerId, 'strip_labels', stripLabelTexts);
 
     const tickTexts = [
         ...(staticChrome.x_ticks || []), ...(vpChrome.x_ticks || []),
@@ -422,19 +462,21 @@ function ggrsV2ClearDataPoints(containerId) {
 }
 
 /**
- * Attach interaction handlers. Attach-once: if already attached, just update
+ * Attach V3 interaction handlers. Attach-once: if already attached, just update
  * the renderer ref (no handler re-creation).
  *
- * Wheel            → vertical pan (WASM pan → GPU setAxisRange → debounced chrome)
- * Ctrl+wheel       → horizontal pan
- * Shift+wheel      → zoom via WASM (zone-dependent):
- *   - Left strip (x < gridOriginX)  → Y range zoom
- *   - Top strip  (y < gridOriginY)  → X range zoom
+ * Wheel            → vertical scroll (WASM scroll → GPU uniform → debounced chrome)
+ * Ctrl+wheel       → horizontal scroll
+ * Shift+wheel      → zoom with anchor (zone-dependent):
+ *   - Left strip (x < gridOriginX)  → Y only
+ *   - Top strip  (y < gridOriginY)  → X only
  *   - Inside grid                    → both
- * Double-click     → reset to full data range (WASM resetView)
+ * Double-click     → reset to initial cell sizes + scroll
  *
  * Data points reproject instantly via GPU uniform write.
- * Chrome rebuilds on 150ms debounce via WASM getViewChrome().
+ * Chrome rects shift via rect shader scroll_offset (GPU, instant).
+ * Text redraws via cached placements + new scroll offset (<1ms).
+ * Chrome recompute: immediate for zoom, debounced for scroll.
  *
  * @param {string} containerId
  * @param {Object} renderer - WASM GGRSRenderer
@@ -459,8 +501,18 @@ function ggrsV2AttachInteraction(containerId, renderer) {
     const CHROME_DEBOUNCE = 150; // ms
 
     function applySnapshot(snapshot) {
+        // Point shader uniforms
         gpu.setAxisRange(snapshot.vis_x_min, snapshot.vis_x_max,
                          snapshot.vis_y_min, snapshot.vis_y_max);
+        gpu.setCellSize(snapshot.cell_width, snapshot.cell_height);
+        gpu.setVisibleCounts(snapshot.n_visible_cols, snapshot.n_visible_rows);
+        gpu.setFacetViewport(snapshot.viewport_col_start, snapshot.viewport_row_start);
+        gpu.setScrollOffset(snapshot.scroll_offset_x, snapshot.scroll_offset_y); // point shader sub-cell
+        // Rect shader scroll
+        gpu.setRectScroll(snapshot.scroll_x, snapshot.scroll_y);
+        // Track scroll in state for text redraws
+        state.scrollX = snapshot.scroll_x;
+        state.scrollY = snapshot.scroll_y;
     }
 
     function scheduleChromeRebuild() {
@@ -481,29 +533,34 @@ function ggrsV2AttachInteraction(containerId, renderer) {
         let snapshot;
 
         if (e.shiftKey) {
-            // Shift+wheel → zoom (zone-dependent)
-            // Browser may swap deltaY→deltaX when Shift is held
+            // Shift+wheel → zoom with anchor (zone-dependent)
             const delta = e.deltaY !== 0 ? e.deltaY : e.deltaX;
             const sign = delta < 0 ? 1 : -1;
-            const originX = gpu.gridOriginX;
-            const originY = gpu.gridOriginY;
-
-            const axis = (pos.x < originX) ? 'y'
-                       : (pos.y < originY) ? 'x' : 'both';
+            const axis = (pos.x < gpu.gridOriginX) ? 'y'
+                       : (pos.y < gpu.gridOriginY) ? 'x' : 'both';
             snapshot = JSON.parse(state.renderer.zoom(axis, sign));
         } else if (e.ctrlKey || e.metaKey) {
-            // Ctrl+wheel → horizontal pan
-            snapshot = JSON.parse(state.renderer.pan('x', e.deltaY));
+            // Ctrl+wheel → horizontal scroll
+            snapshot = JSON.parse(state.renderer.scroll(e.deltaY, 0));
         } else {
-            // Wheel → vertical pan
-            snapshot = JSON.parse(state.renderer.pan('y', e.deltaY));
+            // Wheel → vertical scroll
+            snapshot = JSON.parse(state.renderer.scroll(0, e.deltaY));
         }
 
         applySnapshot(snapshot);
-        scheduleChromeRebuild();
+
+        if (e.shiftKey) {
+            // Zoom narrows axis range → chrome must recompute ticks immediately
+            clearTimeout(chromeTimer);
+            _rebuildViewChrome(containerId);
+        } else {
+            // Scroll: instant text update via cache, debounced chrome recompute
+            _redrawTextWithScroll(containerId);
+            scheduleChromeRebuild();
+        }
     }
 
-    // ── Double-click: reset to full range ─────────────────────────────────
+    // ── Double-click: reset to initial state ─────────────────────────────
 
     function onDblClick() {
         const snapshot = JSON.parse(state.renderer.resetView());
@@ -722,8 +779,14 @@ window.ggrsV2GetViewChrome = function(containerId) {
     return JSON.parse(json);
 };
 
-// V2 programmatic zoom (called from Dart for Flutter drop zones outside GGRS)
+// V3 set chrome from WASM merged getViewChrome (called from Dart on initial render)
+window.ggrsV2SetChrome = function(containerId) {
+    _rebuildViewChrome(containerId);
+};
+
+// V2/V3 programmatic zoom (called from Dart for Flutter drop zones outside GGRS)
 // direction: 'width', 'height', or 'both'. sign: 1 = zoom in, -1 = zoom out.
+// Anchor is always data origin (handled in WASM).
 window.ggrsV2Zoom = function(containerId, direction, sign) {
     const state = _containers[containerId];
     if (!state || !state.gpu || !state.renderer) {
@@ -731,21 +794,17 @@ window.ggrsV2Zoom = function(containerId, direction, sign) {
     }
     const axis = direction === 'width' ? 'x' : direction === 'height' ? 'y' : 'both';
     const snapshot = JSON.parse(state.renderer.zoom(axis, sign));
+    // Apply full snapshot (both shaders)
     state.gpu.setAxisRange(snapshot.vis_x_min, snapshot.vis_x_max,
                            snapshot.vis_y_min, snapshot.vis_y_max);
+    state.gpu.setCellSize(snapshot.cell_width, snapshot.cell_height);
+    state.gpu.setVisibleCounts(snapshot.n_visible_cols, snapshot.n_visible_rows);
+    state.gpu.setFacetViewport(snapshot.viewport_col_start, snapshot.viewport_row_start);
+    state.gpu.setScrollOffset(snapshot.scroll_offset_x, snapshot.scroll_offset_y);
+    state.gpu.setRectScroll(snapshot.scroll_x, snapshot.scroll_y);
+    state.scrollX = snapshot.scroll_x;
+    state.scrollY = snapshot.scroll_y;
     _rebuildViewChrome(containerId);
-};
-
-// V2 scroll / facet viewport
-window.ggrsV2SetScrollOffset = function(containerId, dx, dy) {
-    const state = _containers[containerId];
-    if (!state) throw new Error('[GGRS-V2] Not initialized: ' + containerId);
-    state.gpu.setScrollOffset(dx, dy);
-};
-window.ggrsV2SetFacetViewport = function(containerId, colStart, rowStart) {
-    const state = _containers[containerId];
-    if (!state) throw new Error('[GGRS-V2] Not initialized: ' + containerId);
-    state.gpu.setFacetViewport(colStart, rowStart);
 };
 
 // V2 cleanup

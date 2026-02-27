@@ -141,9 +141,13 @@ class GgrsServiceV2 extends ChangeNotifier {
           (metadata.getProperty<JSNumber>('y_max'.toJS)).toDartDouble;
       final dataXMin =
           (metadata.getProperty<JSNumber>('data_x_min'.toJS)).toDartDouble;
+      final dataXMax =
+          (metadata.getProperty<JSNumber>('data_x_max'.toJS)).toDartDouble;
       final dataYMin =
           (metadata.getProperty<JSNumber>('data_y_min'.toJS)).toDartDouble;
-      log('initPlotStream DONE  nRows=${cqResult.nRows} facets=${nColFacets}x$nRowFacets x=[$xMin,$xMax] y=[$yMin,$yMax] data_min=($dataXMin,$dataYMin)');
+      final dataYMax =
+          (metadata.getProperty<JSNumber>('data_y_max'.toJS)).toDartDouble;
+      log('initPlotStream DONE  nRows=${cqResult.nRows} facets=${nColFacets}x$nRowFacets axis=[$xMin,$xMax]×[$yMin,$yMax] data=[$dataXMin,$dataXMax]×[$dataYMin,$dataYMax]');
 
       // Ensure GPU (creates once, resizes on subsequent calls)
       await GgrsInteropV2.ensureGpu(containerId, width, height);
@@ -194,16 +198,8 @@ class GgrsServiceV2 extends ChangeNotifier {
       }
       log('skeleton done  cell=${cellWidth.toStringAsFixed(1)}x${cellHeight.toStringAsFixed(1)} offset=(${offsetX.toStringAsFixed(1)},${offsetY.toStringAsFixed(1)}) visibleRows=$nVisibleRows/$nRowFacets');
 
-      // Init WASM ViewState with ranges + layout geometry
+      // Init WASM ViewState (V3: virtual surface + viewport)
       final initViewParams = json.encode({
-        'full_x_min': xMin,
-        'full_x_max': xMax,
-        'full_y_min': yMin,
-        'full_y_max': yMax,
-        'data_x_min': dataXMin,
-        'data_y_min': dataYMin,
-        'canvas_width': width,
-        'canvas_height': height,
         'grid_origin_x': offsetX,
         'grid_origin_y': offsetY,
         'cell_width': cellWidth,
@@ -211,17 +207,29 @@ class GgrsServiceV2 extends ChangeNotifier {
         'cell_spacing': cellSpacing,
         'n_visible_cols': nVisibleCols,
         'n_visible_rows': nVisibleRows,
+        'canvas_width': width,
+        'canvas_height': height,
+        'full_x_min': xMin,
+        'full_x_max': xMax,
+        'full_y_min': yMin,
+        'full_y_max': yMax,
+        'data_x_min': dataXMin,
+        'data_y_min': dataYMin,
       });
-      GgrsInteropV2.initView(containerId, _renderer!, initViewParams);
+      final snapshot = GgrsInteropV2.initView(
+          containerId, _renderer!, initViewParams);
       log('view state initialized');
 
-      // Chrome (WASM skeleton → merge in JS → GPU rects + text canvas)
-      final staticChrome = GgrsInteropV2.getStaticChrome(_renderer!);
-      final vpChrome = GgrsInteropV2.getViewChrome(containerId);
-      GgrsInteropV2.mergeAndSetChrome(containerId, staticChrome, vpChrome);
-      log('chrome merged');
+      // Chrome (V3: merged static + viewport from WASM → JS sets layers)
+      GgrsInteropV2.setChrome(containerId);
+      log('chrome set');
 
       // Panel layout → view uniforms (80 bytes)
+      // Use snapshot values for n_visible and viewport start
+      final snapshotNVisCols =
+          (snapshot.getProperty<JSNumber>('n_visible_cols'.toJS)).toDartInt;
+      final snapshotNVisRows =
+          (snapshot.getProperty<JSNumber>('n_visible_rows'.toJS)).toDartInt;
       final panelParams = <String, Object>{
         'xMin': xMin,
         'xMax': xMax,
@@ -232,10 +240,10 @@ class GgrsServiceV2 extends ChangeNotifier {
         'cellWidth': cellWidth,
         'cellHeight': cellHeight,
         'cellSpacing': cellSpacing,
-        'nVisibleCols': nVisibleCols,
-        'nVisibleRows': nVisibleRows,
-        'nActualCols': nVisibleCols,
-        'nActualRows': nVisibleRows,
+        'nVisibleCols': snapshotNVisCols,
+        'nVisibleRows': snapshotNVisRows,
+        'nActualCols': snapshotNVisCols,
+        'nActualRows': snapshotNVisRows,
         'vpColStart': 0,
         'vpRowStart': 0,
       };
