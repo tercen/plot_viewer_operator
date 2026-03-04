@@ -1,3 +1,9 @@
+/* DEPRECATED: This file has been replaced by bootstrap_v3.js
+ * All code below is commented out and should not be used.
+ * Date: 2026-03-03
+ */
+
+/*
 import init, { GGRSRenderer } from "./pkg/ggrs_wasm.js";
 import { GgrsGpuRenderer } from "./ggrs_gpu.js";
 
@@ -1409,3 +1415,4 @@ window.ggrsClearAll = ggrsClearAll;
 // Auto-initialize WASM when module loads
 console.log('[GGRS] Bootstrap loaded, starting auto-initialization...');
 ensureWasmInitialized();
+*/

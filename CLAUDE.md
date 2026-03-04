@@ -2,6 +2,116 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## CRITICAL RULES — Read Before ANY Code Changes
+
+These rules prevent recurring mistakes. Violating any rule has led to hours of wasted work.
+
+### Implementation Process (MANDATORY)
+
+1. **NEVER implement before understanding the full flow**
+   - When asked to change behavior, FIRST trace the complete call chain
+   - Draw a sequence diagram: what calls what, in what order
+   - Verify with user BEFORE writing code
+   - Don't assume, don't guess, don't start coding immediately
+
+2. **NEVER claim something works without manual verification**
+   - Don't say "this should work" or "ready to test"
+   - Don't say "the GPU handles it" unless you've read the GPU code
+   - Don't claim "smooth scrolling works" unless you've traced every function call
+   - Manual verification means: trace through the code path step-by-step with actual values
+
+3. **When asked to simplify, REMOVE code, never ADD**
+   - "Simplify" means delete lines, delete functions, delete systems
+   - If you're adding a new loop, manager, state tracker, or system — STOP
+   - Simplification is subtraction, not addition
+   - Ask: "Can I delete this instead of adding that?"
+
+4. **Read function implementations before calling them**
+   - Never assume what a function does from its name
+   - Read the actual code: what does it call? What side effects?
+   - Example: `syncLayoutState()` calls `requestRedraw()` — you must READ this, not assume
+   - Check call chains: A calls B, B calls C → what does C do?
+
+5. **Incremental changes only**
+   - Change ONE thing, verify it works, then change the next thing
+   - Never change multiple files/systems in one batch
+   - If you can't test each change in isolation, you're changing too much
+   - Big-bang changes are FORBIDDEN
+
+6. **Question patterns from other domains**
+   - Game loop pattern doesn't fit static UI rendering
+   - React patterns don't fit direct GPU rendering
+   - Before applying a pattern, ask: "Why does this pattern fit THIS problem?"
+   - Cargo-culting is forbidden
+
+7. **Ask clarifying questions when requirements are unclear**
+   - User: "make it smooth" → Ask: "What triggers rendering? What animates?"
+   - User: "decouple X" → Ask: "What should trigger X? Who owns X?"
+   - Don't fill gaps with assumptions
+   - Better to ask 5 questions than waste 2 hours on wrong approach
+
+8. **Trace the full call chain before AND after changes**
+   - Before: What calls this function? What does this function call?
+   - After: Did I break any callers? Did I break any callees?
+   - Use grep to find all call sites
+   - Verify each call site still makes sense
+
+9. **Delete dead code immediately**
+   - Don't comment out code "just in case"
+   - Don't leave unused functions
+   - Dead code confuses future changes
+   - Git preserves history — delete with confidence
+
+10. **Never claim confidence you don't have**
+    - Don't say "I have a CLEAR vision" unless you've drawn the flow diagram
+    - Don't say "this eliminates the race condition" unless you've traced the timing
+    - Don't say "clean separation" unless you've verified boundaries
+    - Uncertainty is honest. False confidence wastes time.
+
+### Specific Technical Rules
+
+11. **Event handlers must be minimal**
+    - Scroll/click handlers should ONLY update state
+    - No layout computation in event handlers
+    - No data loading triggers in event handlers (unless debounced separately)
+    - No rendering in event handlers
+    - Event → update state → return immediately
+
+12. **Understand what triggers rendering**
+    - Don't call functions that trigger rendering unless you intend to render
+    - Check if a function calls `requestAnimationFrame`, `requestRedraw`, etc.
+    - Infinite loops happen when X triggers Y which triggers X
+    - Before calling a function, verify it won't cause infinite recursion
+
+13. **Render loops must check if anything changed**
+    - Never run a continuous loop that does work unconditionally
+    - Always: if (stateChanged) { doWork(); }
+    - Otherwise you're wasting CPU/GPU at 60fps
+
+14. **Debouncing must prevent work during rapid changes**
+    - If user scrolls 10 times in 200ms, debounced check should fire ONCE
+    - Don't restart the timer on every change if that defeats the purpose
+    - Verify debounce logic with timing diagram
+
+15. **State must have a single source of truth**
+    - Don't duplicate viewport tracking in multiple places
+    - Don't cache derived values if they can be computed on-demand
+    - If you find yourself syncing state between objects, you've violated this
+
+### When You Realize You Made a Mistake
+
+16. **Admit the mistake immediately and completely**
+    - List EVERY error, not just "a small bug"
+    - Explain WHY you made the error (flawed assumption, didn't read code, etc.)
+    - Don't minimize, don't deflect
+    - The user needs to trust that you understand what went wrong
+
+17. **Don't try to fix it with another complex solution**
+    - If your first approach failed, your instinct is probably still wrong
+    - Propose the SIMPLEST possible fix
+    - Ask for approval before implementing the fix
+    - Break the cycle of complexity-begets-complexity
+
 ## What This Is
 
 Tercen PWA monorepo — a suite of independent Flutter web apps composed into an IDE-like workbench by an orchestrator. Each app runs in its own iframe. The orchestrator is a JetBrains-style panel management shell (split-tree layout, icon strips, draggable splitters). See `apps/orchestrator/docs/functional-spec.md` for the full architecture.

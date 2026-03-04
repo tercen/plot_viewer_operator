@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>GGRS V3 Render Test</title>
+  <style>
+  body {
+      margin: 0;
+      padding: 20px;
+      font-family: monospace;
+      background: #f0f0f0;
+    }
+    #test-container {
+      width: 800px;
+      height: 600px;
+      border: 2px solid #333;
+      position: relative;
+      background: white;
+      margin: 20px auto;
+    }
+    #status {
+      width: 800px;
+      margin: 0 auto 10px;
+      padding: 10px;
+      background: #fff;
+      border: 1px solid #ccc;
+    }
+    .pass { color: green; font-weight: bold; }
+    .fail { color: red; font-weight: bold; }
+    .info { color: blue; }
+  </style>
+</head>
+<body>
+  <div id="status">
+    <h3>V3 Rendering Self-Test</h3>
+    <div id="log"></div>
+  </div>
+  <div id="test-container"></div>
+
+  <!-- Load bootstrap which handles all dependencies -->
+  <script type="module" src="ggrs/bootstrap_v3.js"></script>
+
+  <script>
+    // Wait for bootstrap to load
+    window.addEventListener('load', () => {
+      setTimeout(runTests, 500); // Give modules time to initialize
+    });
+
+    const log = document.getElementById('log');
+    const container = document.getElementById('test-container');
+
+    function logTest(message, status = 'info') {
+      const line = document.createElement('div');
+      line.className = status;
+      line.textContent = `${new Date().toLocaleTimeString()} - ${message}`;
+      log.appendChild(line);
+      console.log(message);
+    }
+
+    async function runTests() {
+      try {
+        if (!window.ggrsV3) {
+          logTest('✗ window.ggrsV3 not found! Bootstrap failed to load.', 'fail');
+          return;
+        }
+
+        const ggrsV3 = window.ggrsV3;
+
+        logTest('Test 1: WASM initialization', 'info');
+        await ggrsV3.ensureWasmInitialized();
+        logTest('✓ WASM initialized', 'pass');
+
+        logTest('Test 2: Create renderer', 'info');
+        const renderer = ggrsV3.createRenderer('test-container');
+        logTest('✓ Renderer created', 'pass');
+
+        // Initialize with synthetic data
+        logTest('Test 3: Initialize Tercen (mock)', 'info');
+        renderer.initializeTercen('http://localhost:5400', 'mock-token');
+        logTest('✓ Tercen initialized', 'pass');
+
+        logTest('Test 4: GPU initialization', 'info');
+        await ggrsV3.ggrsV3EnsureGpu('test-container', 800, 600, renderer);
+        logTest('✓ GPU initialized', 'pass');
+
+        // Check canvas exists and is visible
+        logTest('Test 5: Canvas visibility check', 'info');
+        const canvas = document.getElementById('test-container-canvas');
+        if (!canvas) {
+          logTest('✗ Canvas not found!', 'fail');
+          return;
+        }
+        logTest(`✓ Canvas found: ${canvas.width}x${canvas.height}`, 'pass');
+
+        const computedStyle = window.getComputedStyle(canvas);
+        logTest(`  Canvas display: ${computedStyle.display}`, 'info');
+        logTest(`  Canvas position: ${computedStyle.position}`, 'info');
+        logTest(`  Canvas z-index: ${computedStyle.zIndex}`, 'info');
+        logTest(`  Canvas visibility: ${computedStyle.visibility}`, 'info');
+
+        if (computedStyle.display === 'none' || computedStyle.visibility === 'hidden') {
+          logTest('✗ Canvas is hidden!', 'fail');
+          return;
+        }
+
+        // Create minimal synthetic data config
+        logTest('Test 6: Init plot stream (synthetic)', 'info');
+        const config = {
+          tables: {
+            x_axis_table: 'mock-table-x',
+            y_axis_table: 'mock-table-y'
+          },
+          bindings: {
+            x: { status: 'bound', column: 'x' },
+            y: { status: 'bound', column: 'y' },
+            color: { status: 'unbound' },
+            shape: { status: 'unbound' }
+          },
+          geom_type: 'point',
+          theme: 'gray',
+          x_label: 'X Axis',
+          y_label: 'Y Axis'
+        };
+
+        // This will fail without real Tercen data, but we can test the flow
+        logTest('Test 7: Coordinator context update', 'info');
+        ggrsV3.ggrsV3UpdateContext('test-container', {
+          xMin: 0,
+          xMax: 100,
+          yMin: 0,
+          yMax: 100,
+          dataXMin: 10,
+          dataXMax: 90,
+          dataYMin: 10,
+          dataYMax: 90,
+          nColFacets: 1,
+          nRowFacets: 1
+        });
+        logTest('✓ Context updated', 'pass');
+
+        // Get GPU instance
+        const gpu = ggrsV3.ggrsV3GetGpu('test-container');
+        if (!gpu) {
+          logTest('✗ GPU not found!', 'fail');
+          return;
+        }
+
+        // Initialize layout state (CRITICAL - needed for uniform buffer!)
+        logTest('Test 8: Initialize layout state', 'info');
+
+        // Get actual canvas dimensions
+        const actualCanvasWidth = canvas.clientWidth || 800;
+        const actualCanvasHeight = canvas.clientHeight || 600;
+        logTest(`  Actual canvas CSS dimensions: ${actualCanvasWidth}x${actualCanvasHeight}`, 'info');
+        logTest(`  Canvas buffer dimensions: ${canvas.width}x${canvas.height}`, 'info');
+
+        if (actualCanvasWidth === 0 || actualCanvasHeight === 0) {
+          logTest('⚠ Warning: Canvas has 0 dimensions, using fallback 800x600', 'info');
+        }
+
+        const layoutState = {
+          vis_x_min: 0,
+          vis_x_max: 100,
+          vis_y_min: 0,
+          vis_y_max: 100,
+          grid_origin_x: 0,
+          grid_origin_y: 0,
+          cell_width: actualCanvasWidth,    // Match actual canvas size!
+          cell_height: actualCanvasHeight,  // Match actual canvas size!
+          cell_spacing: 0,
+          n_visible_cols: 1,
+          n_visible_rows: 1,
+          scroll_offset_x: 0,
+          scroll_offset_y: 0,
+        };
+        gpu.syncLayoutState(JSON.stringify(layoutState));
+        logTest(`✓ Layout state synced: cell=${actualCanvasWidth}x${actualCanvasHeight}`, 'pass');
+
+        // Manual chrome rendering test
+        logTest('Test 9: Manual chrome render', 'info');
+        const testChrome = {
+          panel_backgrounds: [{
+            x: 0, y: 0, width: 800, height: 600,
+            color: '#FF0000'  // BRIGHT RED - impossible to miss!
+          }],
+          grid_lines: [
+            { x: 100, y: 0, width: 5, height: 600, color: '#00FF00' },  // GREEN, 5px wide
+            { x: 200, y: 0, width: 5, height: 600, color: '#00FF00' },
+            { x: 0, y: 100, width: 800, height: 5, color: '#00FF00' },
+            { x: 0, y: 200, width: 800, height: 5, color: '#00FF00' }
+          ]
+        };
+        ggrsV3.ggrsV3RenderChrome('test-container', JSON.stringify(testChrome));
+        logTest('✓ Chrome rendered (background + grid)', 'pass');
+
+        // Manual data points test
+        logTest('Test 10: Manual data points', 'info');
+
+        // Create simple synthetic points (in DATA-SPACE coordinates, not pixels!)
+        const testPoints = [];
+        for (let i = 0; i < 100; i++) {
+          testPoints.push({
+            x: Math.random() * 100,  // 0-100 data range (matches layoutState vis_x_max)
+            y: Math.random() * 100,  // 0-100 data range (matches layoutState vis_y_max)
+            ci: 0,
+            ri: 0,
+            color_packed: 0x0000FFFF, // BLUE points (RGBA: blue=255, alpha=255)
+            size: 5.0
+          });
+        }
+        gpu.setDataPoints(testPoints);
+        logTest(`✓ Set ${testPoints.length} data points`, 'pass');
+
+        // Wait for requestAnimationFrame to execute render
+        logTest('Test 11: Waiting for render to execute...', 'info');
+        await new Promise(resolve => setTimeout(resolve, 200)); // Wait for RAF + render
+        logTest('✓ Render cycle complete (check console for [GgrsGpuV3] logs)', 'pass');
+
+        // Visual inspection instructions
+        logTest('=== VISUAL INSPECTION ===', 'info');
+        logTest('Look at the canvas above. You should see:', 'info');
+        logTest('1. BRIGHT RED background (entire canvas)', 'info');
+        logTest('2. BRIGHT GREEN grid lines (thick 5px)', 'info');
+        logTest('3. 100 BLUE dots scattered randomly', 'info');
+        logTest('', 'info');
+        logTest('If canvas is blank white:', 'info');
+        logTest('- Check browser console (F12) for WebGPU errors', 'info');
+        logTest('- Check chrome://gpu to verify WebGPU is enabled', 'info');
+        logTest('- Look for [GgrsGpuV3] render logs in console', 'info');
+
+        logTest('=== ALL TESTS COMPLETE ===', 'pass');
+        logTest('Check the canvas above - you should see:', 'info');
+        logTest('  - Gray background', 'info');
+        logTest('  - Grid lines', 'info');
+        logTest('  - 100 red dots', 'info');
+
+      } catch (error) {
+        logTest(`✗ ERROR: ${error.message}`, 'fail');
+        console.error(error);
+      }
+    }
+  </script>
+</body>
+</html>

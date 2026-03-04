@@ -1,5 +1,4 @@
-// ignore: avoid_web_libraries_in_flutter
-import 'dart:html' as html;
+import 'package:web/web.dart' as web;
 import 'package:flutter/material.dart';
 import '../../domain/models/message_envelope.dart';
 import '../../services/message_router.dart';
@@ -49,10 +48,10 @@ class ThemeProvider extends ChangeNotifier {
   }
 
   static bool _loadFromStorage() {
-    return html.window.localStorage[_storageKey] == 'true';
+    return web.window.localStorage.getItem(_storageKey) == 'true';
   }
 
   static void _saveToStorage(bool value) {
-    html.window.localStorage[_storageKey] = value.toString();
+    web.window.localStorage.setItem(_storageKey, value.toString());
   }
 }

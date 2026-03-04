@@ -6,6 +6,7 @@ import 'package:web/web.dart' as web;
 import 'package:widget_library/widget_library.dart';
 
 import '../../services/ggrs_service_v2.dart';
+import '../../services/ggrs_service_v3.dart';
 import '../providers/plot_state_provider.dart';
 
 /// Embeds the GGRS 6-layer DOM container via HtmlElementView and triggers
@@ -74,7 +75,7 @@ class _GgrsPlotViewState extends State<GgrsPlotView> {
   void _scheduleRender() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      final ggrs = context.read<GgrsServiceV2>();
+      final ggrs = context.read<GgrsServiceV3>();
       final state = context.read<PlotStateProvider>();
       ggrs.render(_containerId, state, _lastWidth, _lastHeight);
     });
@@ -100,7 +101,7 @@ class _GgrsPlotViewState extends State<GgrsPlotView> {
               child: HtmlElementView(viewType: _viewType),
             ),
             // Progress / error overlay
-            Consumer<GgrsServiceV2>(
+            Consumer<GgrsServiceV3>(
               builder: (context, ggrs, _) {
                 if (ggrs.error != null) {
                   return Positioned(

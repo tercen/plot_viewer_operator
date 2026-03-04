@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>WebGPU Debug Test</title>
+  <style>
+    body { margin: 20px; font-family: monospace; background: #333; color: #fff; }
+    #container { width: 400px; height: 300px; border: 3px solid #0f0; margin: 20px 0; }
+    canvas { background: #f00; } /* Red background to verify canvas is showing */
+    pre { background: #222; padding: 10px; }
+  </style>
+</head>
+<body>
+  <h2>WebGPU Raw Test</h2>
+  <div id="log"></div>
+  <div id="container">
+    <canvas id="test-canvas" width="400" height="300"></canvas>
+  </div>
+
+  <script>
+    const log = document.getElementById('log');
+    function addLog(msg) {
+      log.innerHTML += msg + '<br>';
+      console.log(msg);
+    }
+
+    async function test() {
+      try {
+        const canvas = document.getElementById('test-canvas');
+        addLog('Canvas: ' + canvas.width + 'x' + canvas.height);
+
+        // Check WebGPU support
+        if (!navigator.gpu) {
+          addLog('❌ navigator.gpu is undefined - WebGPU not supported!');
+          addLog('Start Chrome with: --enable-unsafe-webgpu');
+          return;
+        }
+        addLog('✓ navigator.gpu exists');
+
+        const adapter = await navigator.gpu.requestAdapter();
+        if (!adapter) {
+          addLog('❌ No WebGPU adapter!');
+          return;
+        }
+        addLog('✓ Got adapter');
+
+        const device = await adapter.requestDevice();
+        addLog('✓ Got device');
+
+        const context = canvas.getContext('webgpu');
+        if (!context) {
+          addLog('❌ Failed to get webgpu context!');
+          return;
+        }
+        addLog('✓ Got WebGPU context');
+
+        const format = navigator.gpu.getPreferredCanvasFormat();
+        addLog('Format: ' + format);
+
+        context.configure({
+          device: device,
+          format: format,
+          alphaMode: 'premultiplied',
+        });
+        addLog('✓ Context configured');
+
+        // Simple render: clear to blue
+        const commandEncoder = device.createCommandEncoder();
+        const textureView = context.getCurrentTexture().createView();
+
+        const renderPass = commandEncoder.beginRenderPass({
+          colorAttachments: [{
+            view: textureView,
+            loadOp: 'clear',
+            clearValue: { r: 0.0, g: 0.5, b: 1.0, a: 1.0 }, // Blue
+            storeOp: 'store',
+          }],
+        });
+        renderPass.end();
+
+        device.queue.submit([commandEncoder.finish()]);
+        addLog('✓ Render submitted - canvas should be BLUE');
+        addLog('');
+        addLog('If canvas is still RED (not blue):');
+        addLog('- WebGPU commands not executing');
+        addLog('- Check console for errors');
+
+      } catch (error) {
+        addLog('❌ ERROR: ' + error.message);
+        console.error(error);
+      }
+    }
+
+    test();
+  </script>
+</body>
+</html>

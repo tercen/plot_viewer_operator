@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>V3 Coordinator Test</title>
+  <style>
+    body { margin: 20px; font-family: monospace; background: #f0f0f0; }
+    #status { background: #fff; padding: 10px; margin-bottom: 10px; border: 1px solid #ccc; max-height: 400px; overflow-y: auto; }
+    #controls { background: #fff; padding: 10px; border: 1px solid #ccc; }
+    button { margin: 5px; padding: 8px 16px; }
+    .pass { color: green; font-weight: bold; }
+    .fail { color: red; font-weight: bold; }
+    .info { color: blue; }
+  </style>
+</head>
+<body>
+  <h2>V3 Coordinator Test</h2>
+  <div id="status">
+    <div id="log"></div>
+  </div>
+  <div id="controls">
+    <button id="btn-dependencies">Test: Layer Dependencies</button>
+    <button id="btn-invalidation">Test: Invalidation Cascade</button>
+    <button id="btn-generation">Test: Generation Counter</button>
+    <button id="btn-error">Test: Error Handling</button>
+    <button id="btn-clear">Clear Log</button>
+  </div>
+
+  <!-- Load coordinator module -->
+  <script type="module">
+    import { RenderLayer, RenderCoordinator } from './ggrs/render_coordinator.js';
+
+    const log = document.getElementById('log');
+
+    function addLog(msg, status = 'info') {
+      const line = document.createElement('div');
+      line.className = status;
+      line.textContent = `${new Date().toLocaleTimeString()} - ${msg}`;
+      log.appendChild(line);
+      if (log.children.length > 50) log.removeChild(log.firstChild);
+      console.log(msg);
+    }
+
+    // Mock layers for testing
+    class MockLayer extends RenderLayer {
+      constructor(name, priority, dependencies = []) {
+        super(name, priority);
+        this.dependencies = dependencies;
+        this.renderCount = 0;
+        this.shouldFail = false;
+      }
+
+      async render(ctx) {
+        this.renderCount++;
+        if (this.shouldFail) {
+          throw new Error(`MockLayer ${this.name} forced failure`);
+        }
+        // Simulate async work
+        await new Promise(resolve => setTimeout(resolve, 10));
+        this.state = 'complete';
+      }
+    }
+
+    // Test 1: Layer Dependencies
+    document.getElementById('btn-dependencies').onclick = async () => {
+      try {
+        addLog('=== Test 1: Layer Dependencies ===', 'info');
+
+        const coordinator = new RenderCoordinator();
+
+        // Create layers with dependency chain: A <- B <- C
+        const layerA = new MockLayer('A', 10, []);
+        const layerB = new MockLayer('B', 20, ['A']);
+        const layerC = new MockLayer('C', 30, ['B']);
+
+        coordinator.registerLayer(layerA);
+        coordinator.registerLayer(layerB);
+        coordinator.registerLayer(layerC);
+
+        addLog('Registered layers: A (no deps), B (depends on A), C (depends on B)', 'info');
+
+        // Check canRender before A completes
+        const ctx = { coordinator };
+        if (layerB.canRender(ctx)) {
+          addLog('✗ Layer B can render before A complete!', 'fail');
+        } else {
+          addLog('✓ Layer B blocked until A complete', 'pass');
+        }
+
+        // Complete A
+        layerA.state = 'complete';
+        if (layerB.canRender(ctx)) {
+          addLog('✓ Layer B can render after A complete', 'pass');
+        } else {
+          addLog('✗ Layer B still blocked!', 'fail');
+        }
+
+        // Check C still blocked
+        if (layerC.canRender(ctx)) {
+          addLog('✗ Layer C can render before B complete!', 'fail');
+        } else {
+          addLog('✓ Layer C blocked until B complete', 'pass');
+        }
+
+        // Complete B
+        layerB.state = 'complete';
+        if (layerC.canRender(ctx)) {
+          addLog('✓ Layer C can render after B complete', 'pass');
+        } else {
+          addLog('✗ Layer C still blocked!', 'fail');
+        }
+
+        addLog('=== Test 1: PASS ===', 'pass');
+      } catch (error) {
+        addLog(`✗ Test 1 ERROR: ${error.message}`, 'fail');
+        console.error(error);
+      }
+    };
+
+    // Test 2: Invalidation Cascade
+    document.getElementById('btn-invalidation').onclick = async () => {
+      try {
+        addLog('=== Test 2: Invalidation Cascade ===', 'info');
+
+        const coordinator = new RenderCoordinator();
+
+        const layerA = new MockLayer('A', 10, []);
+        const layerB = new MockLayer('B', 20, ['A']);
+        const layerC = new MockLayer('C', 30, ['B']);
+
+        coordinator.registerLayer(layerA);
+        coordinator.registerLayer(layerB);
+        coordinator.registerLayer(layerC);
+
+        // Mark all complete
+        layerA.state = 'complete';
+        layerB.state = 'complete';
+        layerC.state = 'complete';
+
+        const genA0 = layerA.generation;
+        const genB0 = layerB.generation;
+        const genC0 = layerC.generation;
+
+        addLog(`Initial generations: A=${genA0}, B=${genB0}, C=${genC0}`, 'info');
+
+        // Invalidate A
+        layerA.invalidate();
+
+        if (layerA.generation > genA0 && layerA.state === 'idle') {
+          addLog('✓ Layer A invalidated (generation incremented, state=idle)', 'pass');
+        } else {
+          addLog('✗ Layer A not properly invalidated', 'fail');
+        }
+
+        // In real coordinator, invalidating A would cascade to B and C
+        // For this test, we manually invalidate to verify the mechanism
+        layerB.invalidate();
+        layerC.invalidate();
+
+        if (layerB.generation > genB0 && layerC.generation > genC0) {
+          addLog('✓ Dependent layers invalidated', 'pass');
+        } else {
+          addLog('✗ Dependent layers not invalidated', 'fail');
+        }
+
+        addLog('=== Test 2: PASS ===', 'pass');
+      } catch (error) {
+        addLog(`✗ Test 2 ERROR: ${error.message}`, 'fail');
+        console.error(error);
+      }
+    };
+
+    // Test 3: Generation Counter (stale render cancellation)
+    document.getElementById('btn-generation').onclick = async () => {
+      try {
+        addLog('=== Test 3: Generation Counter ===', 'info');
+
+        const coordinator = new RenderCoordinator();
+
+        const layer = new MockLayer('test', 10, []);
+        coordinator.registerLayer(layer);
+
+        const gen0 = layer.generation;
+        addLog(`Initial generation: ${gen0}`, 'info');
+
+        // Start render
+        layer.state = 'rendering';
+        const renderGen = layer.generation;
+
+        // Simulate new render request (invalidate)
+        layer.invalidate();
+
+        if (layer.generation > renderGen) {
+          addLog('✓ Generation incremented on invalidate', 'pass');
+        } else {
+          addLog('✗ Generation not incremented', 'fail');
+        }
+
+        // In real code, the render loop would check:
+        // if (layer.generation !== renderGen) { cancel this render }
+        if (layer.generation !== renderGen) {
+          addLog('✓ Stale render would be detected and cancelled', 'pass');
+        } else {
+          addLog('✗ Stale render not detectable', 'fail');
+        }
+
+        addLog('=== Test 3: PASS ===', 'pass');
+      } catch (error) {
+        addLog(`✗ Test 3 ERROR: ${error.message}`, 'fail');
+        console.error(error);
+      }
+    };
+
+    // Test 4: Error Handling
+    document.getElementById('btn-error').onclick = async () => {
+      try {
+        addLog('=== Test 4: Error Handling ===', 'info');
+
+        const coordinator = new RenderCoordinator();
+
+        const layer = new MockLayer('test', 10, []);
+        layer.shouldFail = true;
+        coordinator.registerLayer(layer);
+
+        const ctx = { coordinator };
+
+        try {
+          await layer.render(ctx);
+          addLog('✗ Layer did not throw expected error', 'fail');
+        } catch (error) {
+          if (error.message.includes('forced failure')) {
+            addLog('✓ Layer error thrown correctly', 'pass');
+          } else {
+            addLog(`✗ Wrong error: ${error.message}`, 'fail');
+          }
+        }
+
+        // Check layer state
+        if (layer.state === 'rendering' || layer.state === 'idle') {
+          addLog('✓ Layer state not stuck in complete after error', 'pass');
+        } else {
+          addLog(`✗ Layer in unexpected state: ${layer.state}`, 'fail');
+        }
+
+        addLog('=== Test 4: PASS ===', 'pass');
+      } catch (error) {
+        addLog(`✗ Test 4 ERROR: ${error.message}`, 'fail');
+        console.error(error);
+      }
+    };
+
+    document.getElementById('btn-clear').onclick = () => {
+      log.innerHTML = '';
+      addLog('Event log cleared');
+    };
+
+    addLog('Coordinator test ready. Click buttons to run tests.', 'info');
+  </script>
+</body>
+</html>

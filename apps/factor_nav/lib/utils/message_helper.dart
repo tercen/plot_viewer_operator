@@ -27,7 +27,8 @@ class MessageHelper {
         if (data == null) return;
 
         final jsonObj = web.window['JSON'] as JSObject;
-        final jsonStr = jsonObj.callMethod('stringify'.toJS, data) as JSString;
+        final stringifyFn = jsonObj['stringify'] as JSFunction;
+        final jsonStr = stringifyFn.callAsFunction(jsonObj, data) as JSString;
         final map = json.decode(jsonStr.toDart) as Map<String, dynamic>;
 
         final type = map['type'] as String?;

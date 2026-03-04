@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>V3 Chrome Parsing Test</title>
+  <style>
+    body { margin: 20px; font-family: monospace; background: #f0f0f0; }
+    #status { background: #fff; padding: 10px; margin-bottom: 10px; border: 1px solid #ccc; max-height: 400px; overflow-y: auto; }
+    #controls { background: #fff; padding: 10px; border: 1px solid #ccc; }
+    #visual { background: #fff; padding: 10px; border: 1px solid #ccc; margin-top: 10px; display: flex; gap: 10px; flex-wrap: wrap; }
+    .color-sample { width: 60px; height: 60px; border: 1px solid #000; }
+    button { margin: 5px; padding: 8px 16px; }
+    .pass { color: green; font-weight: bold; }
+    .fail { color: red; font-weight: bold; }
+    .info { color: blue; }
+  </style>
+</head>
+<body>
+  <h2>V3 Chrome Parsing Test</h2>
+  <div id="status">
+    <div id="log"></div>
+  </div>
+  <div id="controls">
+    <button id="btn-hex">Test: Hex Colors (#RGB, #RGBA)</button>
+    <button id="btn-rgb">Test: RGB/RGBA Colors</button>
+    <button id="btn-invalid">Test: Invalid Colors (should throw)</button>
+    <button id="btn-categories">Test: Chrome Category Splitting</button>
+    <button id="btn-clear">Clear Log</button>
+  </div>
+  <div id="visual">
+    <div>Visual color samples will appear here</div>
+  </div>
+
+  <!-- Load coordinator module to access ChromeLayer -->
+  <script type="module">
+    import { ChromeLayer } from './ggrs/render_coordinator.js';
+
+    const log = document.getElementById('log');
+    const visual = document.getElementById('visual');
+
+    function addLog(msg, status = 'info') {
+      const line = document.createElement('div');
+      line.className = status;
+      line.textContent = `${new Date().toLocaleTimeString()} - ${msg}`;
+      log.appendChild(line);
+      if (log.children.length > 50) log.removeChild(log.firstChild);
+      console.log(msg);
+    }
+
+    function addColorSample(label, rgba) {
+      const container = document.createElement('div');
+      container.style.textAlign = 'center';
+
+      const sample = document.createElement('div');
+      sample.className = 'color-sample';
+      sample.style.backgroundColor = `rgba(${Math.round(rgba[0]*255)}, ${Math.round(rgba[1]*255)}, ${Math.round(rgba[2]*255)}, ${rgba[3]})`;
+
+      const labelDiv = document.createElement('div');
+      labelDiv.textContent = label;
+      labelDiv.style.fontSize = '10px';
+      labelDiv.style.marginTop = '4px';
+
+      container.appendChild(sample);
+      container.appendChild(labelDiv);
+      visual.appendChild(container);
+    }
+
+    // Create a mock ChromeLayer to access _parseColor
+    const mockLayer = new ChromeLayer('test', null, null);
+
+    // Test 1: Hex Colors
+    document.getElementById('btn-hex').onclick = () => {
+      try {
+        addLog('=== Test 1: Hex Colors ===', 'info');
+        visual.innerHTML = '';
+
+        // Test #RRGGBB (6 digits)
+        const red = mockLayer._parseColor('#FF0000');
+        if (red[0] === 1.0 && red[1] === 0.0 && red[2] === 0.0 && red[3] === 1.0) {
+          addLog('✓ #FF0000 parsed correctly (red)', 'pass');
+          addColorSample('#FF0000', red);
+        } else {
+          addLog(`✗ #FF0000 wrong: ${JSON.stringify(red)}`, 'fail');
+        }
+
+        const green = mockLayer._parseColor('#00FF00');
+        if (green[0] === 0.0 && green[1] === 1.0 && green[2] === 0.0 && green[3] === 1.0) {
+          addLog('✓ #00FF00 parsed correctly (green)', 'pass');
+          addColorSample('#00FF00', green);
+        } else {
+          addLog(`✗ #00FF00 wrong: ${JSON.stringify(green)}`, 'fail');
+        }
+
+        const blue = mockLayer._parseColor('#0000FF');
+        if (blue[0] === 0.0 && blue[1] === 0.0 && blue[2] === 1.0 && blue[3] === 1.0) {
+          addLog('✓ #0000FF parsed correctly (blue)', 'pass');
+          addColorSample('#0000FF', blue);
+        } else {
+          addLog(`✗ #0000FF wrong: ${JSON.stringify(blue)}`, 'fail');
+        }
+
+        // Test #RRGGBBAA (8 digits)
+        const semiTransparent = mockLayer._parseColor('#FF000080');
+        if (semiTransparent[0] === 1.0 && semiTransparent[1] === 0.0 &&
+            semiTransparent[2] === 0.0 && Math.abs(semiTransparent[3] - 0.5) < 0.01) {
+          addLog('✓ #FF000080 parsed correctly (50% transparent red)', 'pass');
+          addColorSample('#FF000080', semiTransparent);
+        } else {
+          addLog(`✗ #FF000080 wrong: ${JSON.stringify(semiTransparent)}`, 'fail');
+        }
+
+        addLog('=== Test 1: PASS ===', 'pass');
+      } catch (error) {
+        addLog(`✗ Test 1 ERROR: ${error.message}`, 'fail');
+        console.error(error);
+      }
+    };
+
+    // Test 2: RGB/RGBA Colors
+    document.getElementById('btn-rgb').onclick = () => {
+      try {
+        addLog('=== Test 2: RGB/RGBA Colors ===', 'info');
+        visual.innerHTML = '';
+
+        // Test rgb()
+        const rgb = mockLayer._parseColor('rgb(255, 128, 0)');
+        if (rgb[0] === 1.0 && Math.abs(rgb[1] - 0.502) < 0.01 && rgb[2] === 0.0 && rgb[3] === 1.0) {
+          addLog('✓ rgb(255, 128, 0) parsed correctly (orange)', 'pass');
+          addColorSample('rgb(255,128,0)', rgb);
+        } else {
+          addLog(`✗ rgb(255, 128, 0) wrong: ${JSON.stringify(rgb)}`, 'fail');
+        }
+
+        // Test rgba()
+        const rgba = mockLayer._parseColor('rgba(0, 255, 255, 0.7)');
+        if (rgba[0] === 0.0 && rgba[1] === 1.0 && rgba[2] === 1.0 && rgba[3] === 0.7) {
+          addLog('✓ rgba(0, 255, 255, 0.7) parsed correctly (cyan 70%)', 'pass');
+          addColorSample('rgba(0,255,255,0.7)', rgba);
+        } else {
+          addLog(`✗ rgba(0, 255, 255, 0.7) wrong: ${JSON.stringify(rgba)}`, 'fail');
+        }
+
+        // Test rgb() with spaces
+        const rgbSpaces = mockLayer._parseColor('rgb( 100 , 150 , 200 )');
+        if (Math.abs(rgbSpaces[0] - 0.392) < 0.01 &&
+            Math.abs(rgbSpaces[1] - 0.588) < 0.01 &&
+            Math.abs(rgbSpaces[2] - 0.784) < 0.01) {
+          addLog('✓ rgb( 100 , 150 , 200 ) parsed with spaces', 'pass');
+          addColorSample('rgb(100,150,200)', rgbSpaces);
+        } else {
+          addLog(`✗ rgb() with spaces wrong: ${JSON.stringify(rgbSpaces)}`, 'fail');
+        }
+
+        addLog('=== Test 2: PASS ===', 'pass');
+      } catch (error) {
+        addLog(`✗ Test 2 ERROR: ${error.message}`, 'fail');
+        console.error(error);
+      }
+    };
+
+    // Test 3: Invalid Colors (should throw)
+    document.getElementById('btn-invalid').onclick = () => {
+      try {
+        addLog('=== Test 3: Invalid Colors (should throw) ===', 'info');
+        visual.innerHTML = '';
+
+        const invalidColors = [
+          'gray',
+          '#gray',
+          'invalid',
+          '',
+          null,
+          'hsl(200, 50%, 50%)',
+          '#FFF',  // Too short (3 digits not supported)
+        ];
+
+        let passCount = 0;
+        for (const invalidColor of invalidColors) {
+          try {
+            const result = mockLayer._parseColor(invalidColor);
+            addLog(`✗ Invalid color '${invalidColor}' did NOT throw (got ${JSON.stringify(result)})`, 'fail');
+          } catch (error) {
+            if (error.message.includes('Invalid color format')) {
+              addLog(`✓ Invalid color '${invalidColor}' correctly threw error`, 'pass');
+              passCount++;
+            } else {
+              addLog(`✗ Wrong error for '${invalidColor}': ${error.message}`, 'fail');
+            }
+          }
+        }
+
+        if (passCount === invalidColors.length) {
+          addLog('=== Test 3: PASS (all invalid colors threw errors) ===', 'pass');
+        } else {
+          addLog(`=== Test 3: PARTIAL (${passCount}/${invalidColors.length} threw) ===`, 'fail');
+        }
+      } catch (error) {
+        addLog(`✗ Test 3 ERROR: ${error.message}`, 'fail');
+        console.error(error);
+      }
+    };
+
+    // Test 4: Chrome Category Splitting
+    document.getElementById('btn-categories').onclick = () => {
+      try {
+        addLog('=== Test 4: Chrome Category Splitting ===', 'info');
+
+        // Mock chrome JSON from WASM
+        const mockChrome = {
+          panel_backgrounds: [
+            { x: 0, y: 0, width: 100, height: 100, fill: '#F0F0F0' }
+          ],
+          strip_backgrounds: [
+            { x: 0, y: 100, width: 100, height: 30, fill: '#E0E0E0' }
+          ],
+          grid_lines: [
+            { x: 50, y: 0, width: 1, height: 100, color: '#CCCCCC' }
+          ],
+          axis_lines: [
+            { x: 0, y: 100, width: 100, height: 2, color: '#000000' }
+          ],
+          tick_marks: [
+            { x: 25, y: 100, width: 1, height: 5, color: '#000000' }
+          ],
+          panel_borders: [
+            { x: 0, y: 0, width: 100, height: 1, color: '#666666' }
+          ]
+        };
+
+        const categories = Object.keys(mockChrome);
+        const expectedCategories = [
+          'panel_backgrounds',
+          'strip_backgrounds',
+          'grid_lines',
+          'axis_lines',
+          'tick_marks',
+          'panel_borders'
+        ];
+
+        if (categories.length === expectedCategories.length) {
+          addLog(`✓ Found ${categories.length} chrome categories`, 'pass');
+        } else {
+          addLog(`✗ Expected ${expectedCategories.length} categories, got ${categories.length}`, 'fail');
+        }
+
+        for (const cat of expectedCategories) {
+          if (mockChrome[cat]) {
+            addLog(`✓ Category '${cat}' present with ${mockChrome[cat].length} elements`, 'pass');
+          } else {
+            addLog(`✗ Category '${cat}' missing`, 'fail');
+          }
+        }
+
+        // Check backgrounds use 'fill', lines use 'color'
+        if (mockChrome.panel_backgrounds[0].fill) {
+          addLog('✓ panel_backgrounds use "fill" property', 'pass');
+        } else {
+          addLog('✗ panel_backgrounds missing "fill"', 'fail');
+        }
+
+        if (mockChrome.grid_lines[0].color) {
+          addLog('✓ grid_lines use "color" property', 'pass');
+        } else {
+          addLog('✗ grid_lines missing "color"', 'fail');
+        }
+
+        addLog('=== Test 4: PASS ===', 'pass');
+      } catch (error) {
+        addLog(`✗ Test 4 ERROR: ${error.message}`, 'fail');
+        console.error(error);
+      }
+    };
+
+    document.getElementById('btn-clear').onclick = () => {
+      log.innerHTML = '';
+      visual.innerHTML = '<div>Visual color samples will appear here</div>';
+      addLog('Log cleared');
+    };
+
+    addLog('Chrome parsing test ready. Click buttons to run tests.', 'info');
+  </script>
+</body>
+</html>

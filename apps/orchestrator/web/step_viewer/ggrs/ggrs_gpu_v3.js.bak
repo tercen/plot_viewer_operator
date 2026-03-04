@@ -1,0 +1,478 @@
+/**
+ * WebGPU renderer for GGRS v3 — Clean architecture with LayoutState.
+ *
+ * V3 Architecture:
+ * - LayoutState (from WASM LayoutManager) is THE single source of truth
+ * - GPU syncs full 80-byte uniform buffer from LayoutState
+ * - Named rect layers for chrome (panel_backgrounds, grid_lines, etc.)
+ * - Data points in data-space, projected by GPU vertex shader
+ *
+ * Two pipelines:
+ *   1. Rect  — Pixel-space chrome (backgrounds, lines, borders)
+ *   2. Point — Data-space points (projected to pixels via view uniforms)
+ */
+
+// ─── WGSL Shaders ─────────────────────────────────────────────────────────────
+
+/** Chrome rect shader — pixel-space, scroll_offset subtracted. */
+const RECT_SHADER_V3 = /* wgsl */`
+struct RectUniforms {
+    canvas_size: vec2f,     // offset 0, 8 bytes
+    scroll_offset: vec2f,   // offset 8, 8 bytes
+}
+@group(0) @binding(0) var<uniform> u: RectUniforms;
+
+struct VertexOutput {
+    @builtin(position) position: vec4f,
+    @location(0) color: vec4f,
+}
+
+@vertex
+fn vs_main(
+    @builtin(vertex_index) vi: u32,
+    @location(0) rect_pos: vec2f,
+    @location(1) rect_size: vec2f,
+    @location(2) color: vec4f,
+) -> VertexOutput {
+    let corner = vec2f(f32(vi & 1u), f32((vi >> 1u) & 1u));
+    let pos = rect_pos + corner * rect_size - u.scroll_offset;
+    let ndc = vec2f(
+        pos.x / u.canvas_size.x * 2.0 - 1.0,
+        1.0 - pos.y / u.canvas_size.y * 2.0,
+    );
+    var out: VertexOutput;
+    out.position = vec4f(ndc, 0.0, 1.0);
+    out.color = color;
+    return out;
+}
+
+@fragment
+fn fs_main(@location(0) color: vec4f) -> @location(0) vec4f {
+    return color;
+}
+`;
+
+/** Data-space point shader — projects data coords to pixels using view uniforms. */
+const POINT_SHADER_V3 = /* wgsl */`
+struct ViewUniforms {
+    canvas_size: vec2f,         // offset 0
+    x_range: vec2f,             // offset 8  — (vis_x_min, vis_x_max)
+    y_range: vec2f,             // offset 16 — (vis_y_min, vis_y_max)
+    grid_origin: vec2f,         // offset 24 — (grid_origin_x, grid_origin_y)
+    cell_size: vec2f,           // offset 32 — (cell_width, cell_height)
+    cell_spacing: f32,          // offset 40
+    n_visible_cols: u32,        // offset 44
+    n_visible_rows: u32,        // offset 48
+    viewport_col_start: u32,    // offset 52
+    viewport_row_start: u32,    // offset 56
+    _pad0: f32,                 // offset 60
+    scroll_offset: vec2f,       // offset 64
+    _pad1: vec2f,               // offset 72
+}                               // Total: 80 bytes
+@group(0) @binding(0) var<uniform> v: ViewUniforms;
+
+struct VertexOutput {
+    @builtin(position) position: vec4f,
+    @location(0) uv: vec2f,
+    @location(1) color: vec4f,
+}
+
+@vertex
+fn vs_main(
+    @builtin(vertex_index) vi: u32,
+    @location(0) data_pos: vec2f,   // (x, y) in data space
+    @location(1) facet_idx: vec2u,  // (col_idx, row_idx)
+    @location(2) color: vec4f,
+) -> VertexOutput {
+    // Project data→pixel within cell
+    let x_norm = (data_pos.x - v.x_range.x) / (v.x_range.y - v.x_range.x);
+    let y_norm = (data_pos.y - v.y_range.x) / (v.y_range.y - v.y_range.x);
+
+    let cell_x = f32(facet_idx.x) * (v.cell_size.x + v.cell_spacing);
+    let cell_y = f32(facet_idx.y) * (v.cell_size.y + v.cell_spacing);
+
+    let px = v.grid_origin.x + cell_x + x_norm * v.cell_size.x;
+    let py = v.grid_origin.y + cell_y + (1.0 - y_norm) * v.cell_size.y;
+
+    // Expand point to quad
+    let radius = 2.5;
+    let corner = vec2f(f32(vi & 1u), f32((vi >> 1u) & 1u)) * 2.0 - 1.0;
+    let offset = corner * radius;
+    let final_pos = vec2f(px, py) + offset - v.scroll_offset;
+
+    // NDC
+    let ndc = vec2f(
+        final_pos.x / v.canvas_size.x * 2.0 - 1.0,
+        1.0 - final_pos.y / v.canvas_size.y * 2.0,
+    );
+
+    var out: VertexOutput;
+    out.position = vec4f(ndc, 0.0, 1.0);
+    out.uv = corner;
+    out.color = color;
+    return out;
+}
+
+@fragment
+fn fs_main(@location(0) uv: vec2f, @location(1) color: vec4f) -> @location(0) vec4f {
+    // SDF circle
+    let d = length(uv);
+    let alpha = 1.0 - smoothstep(0.9, 1.0, d);
+    return vec4f(color.rgb, color.a * alpha);
+}
+`;
+
+// ─── GPU Renderer Class ───────────────────────────────────────────────────────
+
+export class GgrsGpuV3 {
+    constructor() {
+        this._device = null;
+        this._context = null;
+        this._format = null;
+        this._canvas = null;
+
+        // Pipelines
+        this._rectPipeline = null;
+        this._pointPipeline = null;
+
+        // Uniform buffers
+        this._rectUniformBuffer = null;
+        this._rectBindGroup = null;
+        this._viewUniformBuffer = null;
+        this._viewBindGroup = null;
+
+        // Geometry buffers
+        this._layers = new Map();    // name → { buffer, count } — ordered by insertion
+        this._pointBuffer = null;    // { buffer, count, capacity }
+
+        // Canvas dimensions
+        this._width = 0;
+        this._height = 0;
+
+        // Layout state (v3 architecture) — THE single source of truth
+        this._layoutState = null;
+    }
+
+    async init(canvas, width, height) {
+        this._canvas = canvas;
+        this._width = width;
+        this._height = height;
+
+        // Request adapter
+        const adapter = await navigator.gpu?.requestAdapter();
+        if (!adapter) {
+            throw new Error('WebGPU not supported');
+        }
+
+        // Request device
+        this._device = await adapter.requestDevice();
+        this._context = canvas.getContext('webgpu');
+        this._format = navigator.gpu.getPreferredCanvasFormat();
+
+        this._context.configure({
+            device: this._device,
+            format: this._format,
+            alphaMode: 'premultiplied',
+        });
+
+        // Create uniform buffers
+        this._rectUniformBuffer = this._device.createBuffer({
+            size: 16,  // canvas_size + scroll_offset
+            usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+        });
+
+        this._viewUniformBuffer = this._device.createBuffer({
+            size: 80,  // Full ViewUniforms struct
+            usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+        });
+
+        // Initialize rect uniforms
+        const rectData = new Float32Array([width, height, 0, 0]);
+        this._device.queue.writeBuffer(this._rectUniformBuffer, 0, rectData);
+
+        // Create pipelines
+        await this._createPipelines();
+
+        console.log(`[GgrsGpuV3] Initialized ${width}x${height}`);
+    }
+
+    async _createPipelines() {
+        // Rect pipeline
+        const rectModule = this._device.createShaderModule({
+            code: RECT_SHADER_V3,
+        });
+
+        const rectLayout = this._device.createPipelineLayout({
+            bindGroupLayouts: [
+                this._device.createBindGroupLayout({
+                    entries: [{
+                        binding: 0,
+                        visibility: GPUShaderStage.VERTEX,
+                        buffer: { type: 'uniform' },
+                    }],
+                }),
+            ],
+        });
+
+        this._rectPipeline = this._device.createRenderPipeline({
+            layout: rectLayout,
+            vertex: {
+                module: rectModule,
+                entryPoint: 'vs_main',
+                buffers: [{
+                    arrayStride: 24,  // vec2 pos + vec2 size + vec4 color
+                    attributes: [
+                        { shaderLocation: 0, offset: 0, format: 'float32x2' },  // pos
+                        { shaderLocation: 1, offset: 8, format: 'float32x2' },  // size
+                        { shaderLocation: 2, offset: 16, format: 'float32x4' }, // color
+                    ],
+                }],
+            },
+            fragment: {
+                module: rectModule,
+                entryPoint: 'fs_main',
+                targets: [{ format: this._format, blend: {
+                    color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+                    alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+                }}],
+            },
+            primitive: { topology: 'triangle-strip' },
+        });
+
+        this._rectBindGroup = this._device.createBindGroup({
+            layout: this._rectPipeline.getBindGroupLayout(0),
+            entries: [{ binding: 0, resource: { buffer: this._rectUniformBuffer } }],
+        });
+
+        // Point pipeline
+        const pointModule = this._device.createShaderModule({
+            code: POINT_SHADER_V3,
+        });
+
+        const pointLayout = this._device.createPipelineLayout({
+            bindGroupLayouts: [
+                this._device.createBindGroupLayout({
+                    entries: [{
+                        binding: 0,
+                        visibility: GPUShaderStage.VERTEX,
+                        buffer: { type: 'uniform' },
+                    }],
+                }),
+            ],
+        });
+
+        this._pointPipeline = this._device.createRenderPipeline({
+            layout: pointLayout,
+            vertex: {
+                module: pointModule,
+                entryPoint: 'vs_main',
+                buffers: [{
+                    arrayStride: 24,  // vec2 data_pos + vec2u facet_idx + vec4 color
+                    attributes: [
+                        { shaderLocation: 0, offset: 0, format: 'float32x2' },  // data_pos
+                        { shaderLocation: 1, offset: 8, format: 'uint32x2' },   // facet_idx
+                        { shaderLocation: 2, offset: 16, format: 'float32x4' }, // color
+                    ],
+                }],
+            },
+            fragment: {
+                module: pointModule,
+                entryPoint: 'fs_main',
+                targets: [{ format: this._format, blend: {
+                    color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+                    alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+                }}],
+            },
+            primitive: { topology: 'triangle-strip' },
+        });
+
+        this._viewBindGroup = this._device.createBindGroup({
+            layout: this._pointPipeline.getBindGroupLayout(0),
+            entries: [{ binding: 0, resource: { buffer: this._viewUniformBuffer } }],
+        });
+    }
+
+    // ─── Layout State Sync (v3 architecture) ─────────────────────────────────
+
+    /**
+     * Sync layout state from WASM LayoutManager to GPU.
+     * Writes the entire 80-byte view uniform buffer in one operation.
+     *
+     * @param {string} layoutStateJson - JSON string of LayoutState from WASM
+     */
+    syncLayoutState(layoutStateJson) {
+        const state = JSON.parse(layoutStateJson);
+        this._layoutState = state;
+
+        if (!this._viewUniformBuffer) {
+            console.warn("[GgrsGpuV3] syncLayoutState called before GPU initialized");
+            return;
+        }
+
+        // Write full view uniform buffer (80 bytes = 20 floats)
+        const uniformData = new Float32Array(20);
+        uniformData[0] = state.canvas_width;
+        uniformData[1] = state.canvas_height;
+        uniformData[2] = state.vis_x_min;
+        uniformData[3] = state.vis_x_max;
+        uniformData[4] = state.vis_y_min;
+        uniformData[5] = state.vis_y_max;
+        uniformData[6] = state.grid_origin_x;
+        uniformData[7] = state.grid_origin_y;
+        uniformData[8] = state.cell_width;
+        uniformData[9] = state.cell_height;
+        uniformData[10] = state.cell_spacing;
+        uniformData[11] = state.n_visible_cols;
+        uniformData[12] = state.n_visible_rows;
+        uniformData[13] = state.viewport_col_start;
+        uniformData[14] = state.viewport_row_start;
+        uniformData[15] = 0;  // _pad0
+        uniformData[16] = state.scroll_offset_x;
+        uniformData[17] = state.scroll_offset_y;
+        uniformData[18] = 0;  // _pad1[0]
+        uniformData[19] = 0;  // _pad1[1]
+
+        this._device.queue.writeBuffer(this._viewUniformBuffer, 0, uniformData);
+
+        console.log(`[GgrsGpuV3] Synced layout: vis_x=(${state.vis_x_min.toFixed(2)}, ${state.vis_x_max.toFixed(2)}), cell=${state.cell_width.toFixed(0)}x${state.cell_height.toFixed(0)}`);
+
+        this.render();
+    }
+
+    /**
+     * Get cached layout state (for zone detection).
+     *
+     * @returns {Object|null} Cached LayoutState or null if not synced
+     */
+    getLayoutState() {
+        return this._layoutState;
+    }
+
+    // ─── Chrome Layer Management ─────────────────────────────────────────────
+
+    /**
+     * Set a named chrome layer (replaces existing).
+     *
+     * @param {string} name - Layer name (e.g., "grid_lines", "panel_backgrounds")
+     * @param {Array} rects - Array of {x, y, width, height, color}
+     */
+    setLayer(name, rects) {
+        if (rects.length === 0) {
+            this._layers.delete(name);
+            return;
+        }
+
+        // Build vertex data
+        const vertexData = new Float32Array(rects.length * 6);
+        for (let i = 0; i < rects.length; i++) {
+            const r = rects[i];
+            const color = this._parseColor(r.color);
+            const offset = i * 6;
+            vertexData[offset + 0] = r.x;
+            vertexData[offset + 1] = r.y;
+            vertexData[offset + 2] = r.width;
+            vertexData[offset + 3] = r.height;
+            vertexData[offset + 4] = color[0];
+            vertexData[offset + 5] = color[1];
+            // color[2] and color[3] need proper packing, simplified here
+        }
+
+        // Create or update buffer
+        const buffer = this._device.createBuffer({
+            size: vertexData.byteLength,
+            usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+        });
+        this._device.queue.writeBuffer(buffer, 0, vertexData);
+
+        this._layers.set(name, { buffer, count: rects.length });
+        console.log(`[GgrsGpuV3] Set layer "${name}": ${rects.length} rects`);
+    }
+
+    /**
+     * Clear all chrome layers.
+     */
+    clearLayers() {
+        this._layers.clear();
+    }
+
+    // ─── Data Point Management ───────────────────────────────────────────────
+
+    /**
+     * Clear all data points.
+     */
+    clearDataPoints() {
+        if (this._pointBuffer) {
+            this._pointBuffer.buffer.destroy();
+            this._pointBuffer = null;
+        }
+    }
+
+    /**
+     * Append data points (for progressive streaming).
+     *
+     * @param {Array} points - Array of {x, y, ci, ri, color}
+     */
+    appendDataPoints(points) {
+        // TODO: Implement point buffer append logic
+        console.log(`[GgrsGpuV3] Append ${points.length} points (not yet implemented)`);
+    }
+
+    // ─── Render ──────────────────────────────────────────────────────────────
+
+    /**
+     * Render all layers to canvas.
+     */
+    render() {
+        if (!this._device) return;
+
+        const commandEncoder = this._device.createCommandEncoder();
+        const textureView = this._context.getCurrentTexture().createView();
+
+        const renderPass = commandEncoder.beginRenderPass({
+            colorAttachments: [{
+                view: textureView,
+                clearValue: { r: 1, g: 1, b: 1, a: 1 },
+                loadOp: 'clear',
+                storeOp: 'store',
+            }],
+        });
+
+        // Draw chrome layers (in insertion order)
+        for (const [name, layer] of this._layers) {
+            renderPass.setPipeline(this._rectPipeline);
+            renderPass.setBindGroup(0, this._rectBindGroup);
+            renderPass.setVertexBuffer(0, layer.buffer);
+            renderPass.draw(4, layer.count, 0, 0);
+        }
+
+        // Draw data points
+        if (this._pointBuffer && this._pointBuffer.count > 0) {
+            renderPass.setPipeline(this._pointPipeline);
+            renderPass.setBindGroup(0, this._viewBindGroup);
+            renderPass.setVertexBuffer(0, this._pointBuffer.buffer);
+            renderPass.draw(4, this._pointBuffer.count, 0, 0);
+        }
+
+        renderPass.end();
+        this._device.queue.submit([commandEncoder.finish()]);
+    }
+
+    // ─── Helpers ─────────────────────────────────────────────────────────────
+
+    _parseColor(colorStr) {
+        // Simplified color parser (returns [r, g] packed as floats)
+        // TODO: Proper RGBA parsing
+        return [0.5, 0.5];
+    }
+
+    /**
+     * Destroy GPU resources.
+     */
+    destroy() {
+        this.clearLayers();
+        this.clearDataPoints();
+        if (this._rectUniformBuffer) this._rectUniformBuffer.destroy();
+        if (this._viewUniformBuffer) this._viewUniformBuffer.destroy();
+        console.log("[GgrsGpuV3] Destroyed");
+    }
+}

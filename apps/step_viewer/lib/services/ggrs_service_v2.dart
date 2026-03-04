@@ -131,6 +131,9 @@ class GgrsServiceV2 extends ChangeNotifier {
           (metadata.getProperty<JSNumber>('n_col_facets'.toJS)).toDartInt;
       final nRowFacets =
           (metadata.getProperty<JSNumber>('n_row_facets'.toJS)).toDartInt;
+
+      debugPrint('[FACET-DEBUG] initPlotStream metadata: nColFacets=$nColFacets, nRowFacets=$nRowFacets');
+
       final xMin =
           (metadata.getProperty<JSNumber>('x_min'.toJS)).toDartDouble;
       final xMax =
@@ -161,6 +164,9 @@ class GgrsServiceV2 extends ChangeNotifier {
           (availableHeight / _minCellHeight).floor().clamp(1, nRowFacets);
       final nVisibleRows = maxFittingRows;
       final nVisibleCols = nColFacets;
+
+      final isMultiFacet = nColFacets > 1 || nRowFacets > 1;
+      debugPrint('[FACET-DEBUG] Visible calculation: nVisibleCols=$nVisibleCols/$nColFacets, nVisibleRows=$nVisibleRows/$nRowFacets, isMultiFacet=$isMultiFacet');
 
       // Compute skeleton with viewport limiting visible facet cells
       final viewportJson = json.encode({
@@ -215,6 +221,7 @@ class GgrsServiceV2 extends ChangeNotifier {
         'full_y_max': yMax,
         'data_x_min': dataXMin,
         'data_y_min': dataYMin,
+        'data_y_max': dataYMax,
       });
       final snapshot = GgrsInteropV2.initView(
           containerId, _renderer!, initViewParams);

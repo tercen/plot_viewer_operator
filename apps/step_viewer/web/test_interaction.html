@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>V3 Interaction Test</title>
+  <style>
+    body { margin: 20px; font-family: monospace; background: #f0f0f0; }
+    #status { background: #fff; padding: 10px; margin-bottom: 10px; border: 1px solid #ccc; max-height: 200px; overflow-y: auto; }
+    #test-container { width: 800px; height: 600px; border: 2px solid #000; position: relative; background: white; margin-bottom: 20px; }
+    #controls { background: #fff; padding: 10px; border: 1px solid #ccc; }
+    #instructions { background: #ffffcc; padding: 10px; border: 1px solid #ffcc00; margin-bottom: 10px; }
+    button { margin: 5px; padding: 8px 16px; }
+    .event { color: #666; font-size: 12px; }
+    .pass { color: green; font-weight: bold; }
+    .fail { color: red; font-weight: bold; }
+  </style>
+</head>
+<body>
+  <h2>V3 Interaction Test</h2>
+
+  <div id="instructions">
+    <strong>Interactive Tests:</strong>
+    <ul style="margin: 5px 0;">
+      <li><strong>Scroll</strong> over canvas → vertical pan (chrome should rebuild)</li>
+      <li><strong>Ctrl+Scroll</strong> → horizontal pan</li>
+      <li><strong>Shift+Wheel</strong> in center → zoom both axes (cell size changes)</li>
+      <li><strong>Shift+Wheel</strong> in left strip → zoom height only</li>
+      <li><strong>Shift+Wheel</strong> in top strip → zoom width only</li>
+    </ul>
+  </div>
+
+  <div id="status">
+    <div id="log"></div>
+  </div>
+  <div id="test-container"></div>
+  <div id="controls">
+    <button id="btn-reset">Reset View</button>
+    <button id="btn-zoom-in">Zoom In (Programmatic)</button>
+    <button id="btn-zoom-out">Zoom Out (Programmatic)</button>
+    <button id="btn-clear">Clear Event Log</button>
+  </div>
+
+  <!-- Load bootstrap which exports window.ggrsV3 -->
+  <script type="module" src="ggrs/bootstrap_v3.js"></script>
+
+  <script>
+    window.addEventListener('load', () => {
+      setTimeout(init, 500); // Give modules time to load
+    });
+
+    const log = document.getElementById('log');
+    let gpu = null;
+    let interactionManager = null;
+
+    function addLog(msg, isEvent = false) {
+      const line = document.createElement('div');
+      line.className = isEvent ? 'event' : 'pass';
+      line.textContent = `${new Date().toLocaleTimeString()} - ${msg}`;
+      log.appendChild(line);
+      if (log.children.length > 50) log.removeChild(log.firstChild);
+    }
+
+    async function init() {
+      if (!window.ggrsV3) {
+        addLog('✗ ggrsV3 not loaded!', 'fail');
+        return;
+      }
+
+      const ggrsV3 = window.ggrsV3;
+      addLog('Initializing WebGPU and interaction...');
+
+      await ggrsV3.ensureWasmInitialized();
+      const renderer = ggrsV3.createRenderer('test-container');
+      renderer.initializeTercen('http://localhost:5400', 'mock-token');
+      await ggrsV3.ggrsV3EnsureGpu('test-container', 800, 600, renderer);
+
+      gpu = ggrsV3.ggrsV3GetGpu('test-container');
+
+      // Get actual canvas dimensions
+      const canvas = document.getElementById('test-container-canvas');
+      if (!canvas) {
+        throw new Error('Canvas not found after GPU initialization');
+      }
+      const actualWidth = canvas.clientWidth || 800;
+      const actualHeight = canvas.clientHeight || 600;
+      const gridOffset = 50;
+      const cellWidth = actualWidth - gridOffset * 2;
+      const cellHeight = actualHeight - gridOffset * 2;
+      console.log(`[test_interaction] Canvas: ${actualWidth}x${actualHeight}, Cell: ${cellWidth}x${cellHeight}`);
+
+      // Initialize layout state
+      const layoutState = {
+        vis_x_min: 0,
+        vis_x_max: 100,
+        vis_y_min: 0,
+        vis_y_max: 100,
+        grid_origin_x: gridOffset,  // Offset so we can pan
+        grid_origin_y: gridOffset,
+        cell_width: cellWidth,
+        cell_height: cellHeight,
+        cell_spacing: 0,
+        n_visible_cols: 1,
+        n_visible_rows: 1,
+        scroll_offset_x: 0,
+        scroll_offset_y: 0,
+      };
+      gpu.syncLayoutState(JSON.stringify(layoutState));
+
+      // Render test chrome
+      const testChrome = {
+        panel_backgrounds: [{
+          x: gridOffset, y: gridOffset, width: cellWidth, height: cellHeight,
+          color: '#f0f0f0'  // Light gray background
+        }],
+        grid_lines: [
+          { x: gridOffset, y: gridOffset, width: 1, height: cellHeight, color: '#cccccc' },   // Left border
+          { x: gridOffset + cellWidth, y: gridOffset, width: 1, height: cellHeight, color: '#cccccc' },  // Right border
+          { x: gridOffset, y: gridOffset, width: cellWidth, height: 1, color: '#cccccc' },   // Top border
+          { x: gridOffset, y: gridOffset + cellHeight, width: cellWidth, height: 1, color: '#cccccc' },  // Bottom border
+          // Grid lines (every 25% across)
+          { x: gridOffset + cellWidth * 0.25, y: gridOffset, width: 1, height: cellHeight, color: '#e0e0e0' },
+          { x: gridOffset + cellWidth * 0.50, y: gridOffset, width: 1, height: cellHeight, color: '#e0e0e0' },
+          { x: gridOffset + cellWidth * 0.75, y: gridOffset, width: 1, height: cellHeight, color: '#e0e0e0' },
+          { x: gridOffset, y: gridOffset + cellHeight * 0.25, width: cellWidth, height: 1, color: '#e0e0e0' },
+          { x: gridOffset, y: gridOffset + cellHeight * 0.50, width: cellWidth, height: 1, color: '#e0e0e0' },
+          { x: gridOffset, y: gridOffset + cellHeight * 0.75, width: cellWidth, height: 1, color: '#e0e0e0' },
+        ]
+      };
+      ggrsV3.ggrsV3RenderChrome('test-container', JSON.stringify(testChrome));
+
+      // Generate test data points
+      const testPoints = [];
+      for (let i = 0; i < 200; i++) {
+        testPoints.push({
+          x: Math.random() * 100,
+          y: Math.random() * 100,
+          ci: 0,
+          ri: 0,
+          color_packed: 0x2196F3FF, // Blue
+          size: 4.0,
+        });
+      }
+      gpu.setDataPoints(testPoints);
+
+      // Hook into interaction manager to log events
+      const instance = ggrsV3._gpuInstances.get('test-container');
+      if (instance && instance.interactionManager) {
+        interactionManager = instance.interactionManager;
+
+        // Monkey-patch the interaction handler to log events
+        const originalHandleWheel = interactionManager._handleWheel;
+        interactionManager._handleWheel = function(e) {
+          const zone = this._getZone(e.offsetX, e.offsetY);
+          const type = e.shiftKey ? 'zoom' : (e.ctrlKey ? 'pan-h' : 'pan-v');
+          addLog(`${type} in ${zone} (deltaY: ${e.deltaY.toFixed(0)})`, true);
+          return originalHandleWheel.call(this, e);
+        };
+      }
+
+      addLog('✓ Initialization complete - try interacting with the canvas!');
+
+      // Wire up buttons
+      document.getElementById('btn-reset').onclick = () => {
+        addLog('Resetting view to default');
+        const layoutState = {
+          vis_x_min: 0, vis_x_max: 100,
+          vis_y_min: 0, vis_y_max: 100,
+          grid_origin_x: 50, grid_origin_y: 50,
+          cell_width: 700, cell_height: 500,
+          cell_spacing: 0,
+          n_visible_cols: 1, n_visible_rows: 1,
+          scroll_offset_x: 0, scroll_offset_y: 0,
+        };
+        gpu.syncLayoutState(JSON.stringify(layoutState));
+      };
+
+      document.getElementById('btn-zoom-in').onclick = () => {
+        addLog('Programmatic zoom in');
+        if (interactionManager) {
+          addLog('TODO: Implement programmatic zoom', 'fail');
+        }
+      };
+
+      document.getElementById('btn-zoom-out').onclick = () => {
+        addLog('Programmatic zoom out');
+        addLog('TODO: Implement programmatic zoom', 'fail');
+      };
+
+      document.getElementById('btn-clear').onclick = () => {
+        log.innerHTML = '';
+        addLog('Event log cleared');
+      };
+    }
+  </script>
+</body>
+</html>

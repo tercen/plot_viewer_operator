@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import 'package:widget_library/widget_library.dart';
 import '../../services/ggrs_interop_v2.dart';
 import '../../services/ggrs_service_v2.dart';
+import '../../services/ggrs_service_v3.dart';
 import '../providers/plot_state_provider.dart';
 import 'drop_zone.dart';
 import 'ggrs_plot_view.dart';
@@ -60,7 +61,7 @@ class PlotArea extends StatelessWidget {
             if (event is PointerScrollEvent &&
                 HardwareKeyboard.instance.isShiftPressed) {
               final pos = event.localPosition;
-              final ggrs = context.read<GgrsServiceV2>();
+              final ggrs = context.read<GgrsServiceV3>();
               final containerId = ggrs.activeContainerId;
               if (containerId == null) return;
 

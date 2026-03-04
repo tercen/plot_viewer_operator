@@ -1,0 +1,406 @@
+/**
+ * InteractionManager - Pluggable interaction system for GGRS plots (v3 architecture)
+ *
+ * Routes user events (wheel, drag, click) to appropriate interaction handlers in WASM.
+ * Uses geometric zone detection (left strip, top strip, data grid, outside) to determine
+ * which handler to activate and which axes to affect.
+ *
+ * @example
+ * const manager = new InteractionManager(containerId, renderer, gpu, interactionDiv);
+ * // Automatically attaches event listeners and routes to WASM handlers
+ */
+export class InteractionManager {
+  /**
+   * @param {string} containerId - DOM container ID
+   * @param {Object} renderer - WASM GGRSRenderer instance
+   * @param {Object} gpu - GPU renderer with layout state
+   * @param {HTMLElement} interactionDiv - Top-level interaction layer
+   */
+  constructor(containerId, renderer, gpu, interactionDiv) {
+    this.containerId = containerId;
+    this.renderer = renderer;
+    this.gpu = gpu;
+    this.interactionDiv = interactionDiv;
+
+    // Interaction state
+    this.state = "IDLE"; // "IDLE" | "ACTIVE" | "COMMITTED" | "CANCELLED"
+    this.handlerType = null;
+    this.lastMouseX = 0;
+    this.lastMouseY = 0;
+    this.isDragging = false;
+    this.dragStartX = 0;
+    this.dragStartY = 0;
+
+    // Event listeners (for cleanup)
+    this.listeners = [];
+
+    // Attach event listeners
+    this._attachListeners();
+
+    console.log(`[InteractionManager] Initialized for ${containerId}`);
+  }
+
+  /**
+   * Detect which zone a point (x, y) falls into.
+   * Uses cached layout geometry from GPU (synced from LayoutState).
+   *
+   * @param {number} x - Canvas X coordinate
+   * @param {number} y - Canvas Y coordinate
+   * @returns {"left"|"top"|"data"|"outside"}
+   */
+  detectZone(x, y) {
+    const layout = this.gpu.getLayoutState();
+    if (!layout) {
+      console.warn("[InteractionManager] No layout state available");
+      return "outside";
+    }
+
+    const { grid_origin_x, grid_origin_y } = layout;
+
+    // Zone boundaries (simple geometric checks)
+    if (x < grid_origin_x) {
+      return "left"; // Row facet strip (left of grid)
+    }
+    if (y < grid_origin_y) {
+      return "top"; // Column facet strip (above grid)
+    }
+    if (x >= grid_origin_x && y >= grid_origin_y) {
+      return "data"; // Inside data grid
+    }
+    return "outside"; // Canvas margins
+  }
+
+  /**
+   * Select which handler to use based on event type, zone, and modifiers.
+   *
+   * @param {string} eventType - "wheel" | "mousedown" | "dblclick"
+   * @param {string} zone - "left" | "top" | "data" | "outside"
+   * @param {Object} modifiers - {shiftKey, ctrlKey, altKey, metaKey}
+   * @returns {string|null} Handler type ("Zoom", "Pan", "Reset") or null
+   */
+  selectHandler(eventType, zone, modifiers) {
+    // Reject interactions outside the plot
+    if (zone === "outside") {
+      return null;
+    }
+
+    if (eventType === "wheel") {
+      // Shift+Wheel = Zoom (zone-aware: left→Y, top→X, data→both)
+      if (modifiers.shiftKey) {
+        return "Zoom";
+      }
+      // Ctrl+Wheel = Pan X
+      if (modifiers.ctrlKey) {
+        return "PanX"; // TODO: Implement separate PanX handler or pass axis in params
+      }
+      // Wheel (no modifiers) = Pan Y
+      return "PanY"; // TODO: Implement separate PanY handler
+    }
+
+    if (eventType === "mousedown") {
+      // Alt+Drag = Select (future)
+      if (modifiers.altKey) {
+        return null; // Not implemented yet
+      }
+      // Ctrl+Drag = Pan
+      if (modifiers.ctrlKey) {
+        return "Pan";
+      }
+      // Plain drag = Pan
+      return "Pan";
+    }
+
+    if (eventType === "dblclick") {
+      // Double-click = Reset view
+      return "Reset";
+    }
+
+    return null;
+  }
+
+  /**
+   * Start an interaction.
+   *
+   * @param {string} handlerType - "Zoom", "Pan", "Reset"
+   * @param {string} zone - "left" | "top" | "data" | "outside"
+   * @param {number} x - Canvas X coordinate
+   * @param {number} y - Canvas Y coordinate
+   * @param {Object} params - Handler-specific parameters
+   */
+  startInteraction(handlerType, zone, x, y, params) {
+    if (this.state === "ACTIVE") {
+      console.warn(`[InteractionManager] Already active (${this.handlerType}), ignoring new start`);
+      return;
+    }
+
+    console.log(`[InteractionManager] Start ${handlerType} in ${zone} at (${x.toFixed(0)}, ${y.toFixed(0)})`);
+
+    this.handlerType = handlerType;
+    this.state = "ACTIVE";
+    this.lastMouseX = x;
+    this.lastMouseY = y;
+
+    // Call WASM
+    const resultJson = this.renderer.interactionStart(handlerType, zone, x, y, JSON.stringify(params));
+    const result = JSON.parse(resultJson);
+
+    if (result.error) {
+      console.error(`[InteractionManager] Start failed: ${result.error}`);
+      this.state = "IDLE";
+      this.handlerType = null;
+      return;
+    }
+
+    // Apply snapshot (if any)
+    this._applySnapshot(result);
+
+    // Wheel zoom commits immediately (no drag phase)
+    if (handlerType === "Zoom") {
+      this.state = "IDLE";
+      this.handlerType = null;
+    }
+  }
+
+  /**
+   * Update an active interaction (mousemove during drag).
+   *
+   * @param {number} x - Current canvas X
+   * @param {number} y - Current canvas Y
+   * @param {Object} params - Handler-specific parameters
+   */
+  updateInteraction(x, y, params) {
+    if (this.state !== "ACTIVE") {
+      return;
+    }
+
+    const dx = x - this.lastMouseX;
+    const dy = y - this.lastMouseY;
+
+    // Call WASM
+    const resultJson = this.renderer.interactionMove(dx, dy, x, y, JSON.stringify(params));
+    const result = JSON.parse(resultJson);
+
+    if (result.error) {
+      console.error(`[InteractionManager] Move failed: ${result.error}`);
+      return;
+    }
+
+    // Apply snapshot
+    this._applySnapshot(result);
+
+    this.lastMouseX = x;
+    this.lastMouseY = y;
+  }
+
+  /**
+   * End an active interaction (mouseup).
+   */
+  endInteraction() {
+    if (this.state !== "ACTIVE") {
+      return;
+    }
+
+    console.log(`[InteractionManager] End ${this.handlerType}`);
+
+    // Call WASM
+    const resultJson = this.renderer.interactionEnd();
+    const result = JSON.parse(resultJson);
+
+    if (result.error) {
+      console.error(`[InteractionManager] End failed: ${result.error}`);
+    } else {
+      // Apply final snapshot
+      this._applySnapshot(result);
+    }
+
+    this.state = "IDLE";
+    this.handlerType = null;
+    this.isDragging = false;
+  }
+
+  /**
+   * Cancel an active interaction (Esc key, context loss).
+   */
+  cancelInteraction() {
+    if (this.state !== "ACTIVE") {
+      return;
+    }
+
+    console.log(`[InteractionManager] Cancel ${this.handlerType}`);
+
+    // Call WASM
+    const resultJson = this.renderer.interactionCancel();
+    const result = JSON.parse(resultJson);
+
+    if (result.error) {
+      console.error(`[InteractionManager] Cancel failed: ${result.error}`);
+    } else {
+      // Apply snapshot (restore pre-interaction state)
+      this._applySnapshot(result);
+    }
+
+    this.state = "IDLE";
+    this.handlerType = null;
+    this.isDragging = false;
+  }
+
+  /**
+   * Apply a snapshot from an interaction result.
+   *
+   * @param {Object} result - Parsed JSON result from WASM
+   * @private
+   */
+  _applySnapshot(result) {
+    if (result.type === "view_update" && result.snapshot) {
+      // Sync layout state to GPU
+      this.gpu.syncLayoutState(JSON.stringify(result.snapshot));
+    } else if (result.type === "chrome_update" && result.snapshot) {
+      // Update chrome layers (future: annotations, selections)
+      // For now, just log
+      console.log("[InteractionManager] Chrome update:", result.snapshot);
+    }
+    // "no_change", "committed", "cancelled" → no snapshot to apply
+  }
+
+  /**
+   * Attach event listeners to the interaction layer.
+   * @private
+   */
+  _attachListeners() {
+    const div = this.interactionDiv;
+
+    // ──────────────────────────────────────────────────────────────────────
+    // WHEEL (Zoom or Pan)
+    // ──────────────────────────────────────────────────────────────────────
+    const onWheel = (e) => {
+      e.preventDefault();
+
+      // Browser quirk: Shift+Wheel swaps deltaY→deltaX
+      // Always use deltaY for vertical wheel, even when Shift is held
+      const delta = e.deltaY !== 0 ? e.deltaY : e.deltaX;
+
+      const rect = div.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+
+      const zone = this.detectZone(x, y);
+      const handler = this.selectHandler("wheel", zone, {
+        shiftKey: e.shiftKey,
+        ctrlKey: e.ctrlKey,
+        altKey: e.altKey,
+        metaKey: e.metaKey,
+      });
+
+      if (!handler) return;
+
+      // Wheel is instant (start + end immediately)
+      this.startInteraction(handler, zone, x, y, { delta });
+      // Zoom handler commits immediately, so no need to call endInteraction
+    };
+
+    div.addEventListener("wheel", onWheel, { passive: false });
+    this.listeners.push(() => div.removeEventListener("wheel", onWheel));
+
+    // ──────────────────────────────────────────────────────────────────────
+    // MOUSEDOWN (Start drag)
+    // ──────────────────────────────────────────────────────────────────────
+    const onMouseDown = (e) => {
+      if (e.button !== 0) return; // Left button only
+
+      const rect = div.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+
+      const zone = this.detectZone(x, y);
+      const handler = this.selectHandler("mousedown", zone, {
+        shiftKey: e.shiftKey,
+        ctrlKey: e.ctrlKey,
+        altKey: e.altKey,
+        metaKey: e.metaKey,
+      });
+
+      if (!handler) return;
+
+      this.isDragging = true;
+      this.dragStartX = x;
+      this.dragStartY = y;
+      this.startInteraction(handler, zone, x, y, {});
+    };
+
+    div.addEventListener("mousedown", onMouseDown);
+    this.listeners.push(() => div.removeEventListener("mousedown", onMouseDown));
+
+    // ──────────────────────────────────────────────────────────────────────
+    // MOUSEMOVE (Update drag)
+    // ──────────────────────────────────────────────────────────────────────
+    const onMouseMove = (e) => {
+      if (!this.isDragging) return;
+
+      const rect = div.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+
+      this.updateInteraction(x, y, {});
+    };
+
+    div.addEventListener("mousemove", onMouseMove);
+    this.listeners.push(() => div.removeEventListener("mousemove", onMouseMove));
+
+    // ──────────────────────────────────────────────────────────────────────
+    // MOUSEUP (End drag)
+    // ──────────────────────────────────────────────────────────────────────
+    const onMouseUp = (e) => {
+      if (!this.isDragging) return;
+
+      this.endInteraction();
+    };
+
+    div.addEventListener("mouseup", onMouseUp);
+    this.listeners.push(() => div.removeEventListener("mouseup", onMouseUp));
+
+    // Also listen on document to catch mouseup outside the div
+    document.addEventListener("mouseup", onMouseUp);
+    this.listeners.push(() => document.removeEventListener("mouseup", onMouseUp));
+
+    // ──────────────────────────────────────────────────────────────────────
+    // DOUBLE-CLICK (Reset view)
+    // ──────────────────────────────────────────────────────────────────────
+    const onDblClick = (e) => {
+      const rect = div.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+
+      const zone = this.detectZone(x, y);
+      const handler = this.selectHandler("dblclick", zone, {});
+
+      if (!handler) return;
+
+      // Reset is instant
+      this.startInteraction(handler, zone, x, y, {});
+    };
+
+    div.addEventListener("dblclick", onDblClick);
+    this.listeners.push(() => div.removeEventListener("dblclick", onDblClick));
+
+    // ──────────────────────────────────────────────────────────────────────
+    // KEYDOWN (Cancel on Escape)
+    // ──────────────────────────────────────────────────────────────────────
+    const onKeyDown = (e) => {
+      if (e.key === "Escape" && this.state === "ACTIVE") {
+        this.cancelInteraction();
+      }
+    };
+
+    document.addEventListener("keydown", onKeyDown);
+    this.listeners.push(() => document.removeEventListener("keydown", onKeyDown));
+  }
+
+  /**
+   * Remove all event listeners and clean up.
+   */
+  destroy() {
+    console.log(`[InteractionManager] Destroying for ${this.containerId}`);
+    this.listeners.forEach((removeListener) => removeListener());
+    this.listeners = [];
+  }
+}

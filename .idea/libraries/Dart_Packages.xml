@@ -368,6 +368,7 @@
           <value>
             <list>
               <option value="$USER_HOME$/.pub-cache/hosted/pub.dev/uuid-4.5.2/lib" />
+              <option value="$USER_HOME$/.pub-cache/hosted/pub.dev/uuid-4.5.3/lib" />
             </list>
           </value>
         </entry>
@@ -470,6 +471,7 @@
       <root url="file://$USER_HOME$/.pub-cache/hosted/pub.dev/test_api-0.7.6/lib" />
       <root url="file://$USER_HOME$/.pub-cache/hosted/pub.dev/typed_data-1.4.0/lib" />
       <root url="file://$USER_HOME$/.pub-cache/hosted/pub.dev/uuid-4.5.2/lib" />
+      <root url="file://$USER_HOME$/.pub-cache/hosted/pub.dev/uuid-4.5.3/lib" />
       <root url="file://$USER_HOME$/.pub-cache/hosted/pub.dev/vector_math-2.2.0/lib" />
       <root url="file://$USER_HOME$/.pub-cache/hosted/pub.dev/vm_service-14.2.5/lib" />
       <root url="file://$USER_HOME$/.pub-cache/hosted/pub.dev/vm_service-15.0.2/lib" />

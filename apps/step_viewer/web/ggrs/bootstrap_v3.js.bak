@@ -1,0 +1,254 @@
+/**
+ * GGRS V3 Bootstrap — Clean v3 architecture with LayoutManager + InteractionManager.
+ *
+ * Key differences from v2:
+ * - No ViewState in WASM - replaced by LayoutManager + LayoutState
+ * - No hardcoded event handlers - replaced by InteractionManager
+ * - Clean separation: Layout (WASM) → Interaction (WASM trait + JS manager) → Render (GPU)
+ *
+ * DOM structure:
+ *   <canvas class="ggrs-gpu">              WebGPU: named rect layers + data points
+ *   <canvas class="ggrs-text-labels">      Canvas 2D: title, axis labels, strip labels (static)
+ *   <canvas class="ggrs-text-ticks">       Canvas 2D: tick labels (updated on zoom/pan)
+ *   <div class="ggrs-interaction">         mouse/touch events (InteractionManager)
+ */
+
+import { GgrsGpuV3 } from "./ggrs_gpu_v3.js";
+import { InteractionManager } from "./interaction_manager.js";
+
+// ─── Per-container state ───────────────────────────────────────────────────────
+
+const _containers = {};  // containerId → { gpu, renderer, interactionManager, ... }
+
+// ─── Helpers ───────────────────────────────────────────────────────────────────
+
+function _applyLayerStyle(el, w, h) {
+    el.style.position = 'absolute';
+    el.style.left = '0';
+    el.style.top = '0';
+    el.style.width = w + 'px';
+    el.style.height = h + 'px';
+    el.style.pointerEvents = 'none';
+}
+
+// ─── Main Bootstrap Function ───────────────────────────────────────────────────
+
+/**
+ * Ensure GPU is initialized and ready for a container.
+ *
+ * @param {string} containerId - DOM container ID
+ * @param {number} width - Canvas width
+ * @param {number} height - Canvas height
+ * @param {Object} renderer - WASM GGRSRenderer instance
+ * @returns {Promise<Object>} GPU instance
+ */
+export async function ggrsV3EnsureGpu(containerId, width, height, renderer) {
+    let state = _containers[containerId];
+
+    if (state?.gpu) {
+        console.log(`[GGRS V3] GPU already initialized for ${containerId}`);
+        return state.gpu;
+    }
+
+    console.log(`[GGRS V3] Initializing GPU for ${containerId} (${width}x${height})`);
+
+    const container = document.getElementById(containerId);
+    if (!container) {
+        throw new Error(`Container ${containerId} not found`);
+    }
+
+    // Clear container
+    container.innerHTML = '';
+    container.style.position = 'relative';
+    container.style.width = width + 'px';
+    container.style.height = height + 'px';
+
+    // ── Layer 1: GPU Canvas (backgrounds, chrome, data points) ────────────────
+
+    const gpuCanvas = document.createElement('canvas');
+    gpuCanvas.className = 'ggrs-gpu';
+    gpuCanvas.width = width;
+    gpuCanvas.height = height;
+    _applyLayerStyle(gpuCanvas, width, height);
+    container.appendChild(gpuCanvas);
+
+    // ── Layer 2: Text Canvas - Labels (static) ────────────────────────────────
+
+    const textLabelsCanvas = document.createElement('canvas');
+    textLabelsCanvas.className = 'ggrs-text-labels';
+    textLabelsCanvas.width = width;
+    textLabelsCanvas.height = height;
+    _applyLayerStyle(textLabelsCanvas, width, height);
+    container.appendChild(textLabelsCanvas);
+
+    // ── Layer 3: Text Canvas - Ticks (dynamic, updates on zoom) ───────────────
+
+    const textTicksCanvas = document.createElement('canvas');
+    textTicksCanvas.className = 'ggrs-text-ticks';
+    textTicksCanvas.width = width;
+    textTicksCanvas.height = height;
+    _applyLayerStyle(textTicksCanvas, width, height);
+    container.appendChild(textTicksCanvas);
+
+    // ── Layer 4: Interaction Div (events) ─────────────────────────────────────
+
+    const interactionDiv = document.createElement('div');
+    interactionDiv.className = 'ggrs-interaction';
+    interactionDiv.style.position = 'absolute';
+    interactionDiv.style.left = '0';
+    interactionDiv.style.top = '0';
+    interactionDiv.style.width = width + 'px';
+    interactionDiv.style.height = height + 'px';
+    interactionDiv.style.pointerEvents = 'auto';
+    interactionDiv.style.cursor = 'crosshair';
+    container.appendChild(interactionDiv);
+
+    // ── Initialize GPU ─────────────────────────────────────────────────────────
+
+    const gpu = new GgrsGpuV3();
+    await gpu.init(gpuCanvas, width, height);
+
+    // ── Initialize InteractionManager ──────────────────────────────────────────
+
+    const interactionManager = new InteractionManager(
+        containerId,
+        renderer,
+        gpu,
+        interactionDiv
+    );
+
+    // ── Store State ────────────────────────────────────────────────────────────
+
+    state = {
+        gpu,
+        renderer,
+        interactionManager,
+        textLabelsCanvas,
+        textTicksCanvas,
+        interactionDiv,
+    };
+    _containers[containerId] = state;
+
+    console.log(`[GGRS V3] GPU initialized for ${containerId}`);
+    return gpu;
+}
+
+/**
+ * Render chrome (backgrounds, axes, grid, borders) to GPU named layers.
+ *
+ * @param {string} containerId - DOM container ID
+ * @param {Object} chrome - Chrome data from WASM (panel_backgrounds, grid_lines, etc.)
+ */
+export function ggrsV3RenderChrome(containerId, chrome) {
+    const state = _containers[containerId];
+    if (!state?.gpu) {
+        console.error(`[GGRS V3] GPU not initialized for ${containerId}`);
+        return;
+    }
+
+    const gpu = state.gpu;
+
+    // Set each chrome category as a named layer
+    const categories = [
+        'panel_backgrounds',
+        'strip_backgrounds',
+        'grid_lines',
+        'axis_lines',
+        'tick_marks',
+        'panel_borders'
+    ];
+
+    for (const category of categories) {
+        const items = chrome[category];
+        if (!items || items.length === 0) continue;
+
+        // Convert WASM chrome items to GPU rect format
+        const rects = items.map(item => ({
+            x: item.x,
+            y: item.y,
+            width: item.width,
+            height: item.height,
+            color: item.fill || item.stroke || '#000000',
+        }));
+
+        gpu.setLayer(category, rects);
+    }
+
+    console.log(`[GGRS V3] Chrome rendered: ${categories.length} categories`);
+}
+
+/**
+ * Stream data points to GPU in chunks (progressive rendering).
+ *
+ * @param {string} containerId - DOM container ID
+ * @param {Object} renderer - WASM GGRSRenderer instance
+ * @param {number} chunkSize - Points per chunk (default 15000)
+ */
+export async function ggrsV3StreamData(containerId, renderer, chunkSize = 15000) {
+    const state = _containers[containerId];
+    if (!state?.gpu) {
+        console.error(`[GGRS V3] GPU not initialized for ${containerId}`);
+        return;
+    }
+
+    const gpu = state.gpu;
+    gpu.clearDataPoints();
+
+    let totalPoints = 0;
+    let done = false;
+
+    while (!done) {
+        const resultJson = await renderer.loadDataChunk(chunkSize);
+        const result = JSON.parse(resultJson);
+
+        if (result.error) {
+            console.error(`[GGRS V3] Data chunk load failed: ${result.error}`);
+            break;
+        }
+
+        const { points, done: isDone } = result;
+        done = isDone;
+
+        if (points && points.length > 0) {
+            gpu.appendDataPoints(points);
+            totalPoints += points.length;
+            console.log(`[GGRS V3] Loaded ${points.length} points (total: ${totalPoints})`);
+        }
+
+        // Yield frame for progressive paint
+        await new Promise(resolve => requestAnimationFrame(resolve));
+    }
+
+    console.log(`[GGRS V3] Data streaming complete: ${totalPoints} points`);
+}
+
+/**
+ * Cleanup GPU and interaction manager for a container.
+ *
+ * @param {string} containerId - DOM container ID
+ */
+export function ggrsV3Cleanup(containerId) {
+    const state = _containers[containerId];
+    if (!state) return;
+
+    if (state.interactionManager) {
+        state.interactionManager.destroy();
+    }
+
+    if (state.gpu) {
+        state.gpu.destroy();
+    }
+
+    delete _containers[containerId];
+    console.log(`[GGRS V3] Cleaned up ${containerId}`);
+}
+
+/**
+ * Get GPU instance for a container (for external access).
+ *
+ * @param {string} containerId - DOM container ID
+ * @returns {Object|null} GPU instance or null
+ */
+export function ggrsV3GetGpu(containerId) {
+    return _containers[containerId]?.gpu || null;
+}

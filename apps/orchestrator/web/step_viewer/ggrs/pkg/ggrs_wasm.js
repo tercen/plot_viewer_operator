@@ -237,12 +237,12 @@ if (!('encodeInto' in cachedTextEncoder)) {
 
 let WASM_VECTOR_LEN = 0;
 
-function __wasm_bindgen_func_elem_1011(arg0, arg1, arg2) {
-    wasm.__wasm_bindgen_func_elem_1011(arg0, arg1, addHeapObject(arg2));
+function __wasm_bindgen_func_elem_1300(arg0, arg1, arg2) {
+    wasm.__wasm_bindgen_func_elem_1300(arg0, arg1, addHeapObject(arg2));
 }
 
-function __wasm_bindgen_func_elem_36428(arg0, arg1, arg2, arg3) {
-    wasm.__wasm_bindgen_func_elem_36428(arg0, arg1, addHeapObject(arg2), addHeapObject(arg3));
+function __wasm_bindgen_func_elem_36777(arg0, arg1, arg2, arg3) {
+    wasm.__wasm_bindgen_func_elem_36777(arg0, arg1, addHeapObject(arg2), addHeapObject(arg3));
 }
 
 const GGRSRendererFinalization = (typeof FinalizationRegistry === 'undefined')
@@ -250,8 +250,6 @@ const GGRSRendererFinalization = (typeof FinalizationRegistry === 'undefined')
     : new FinalizationRegistry(ptr => wasm.__wbg_ggrsrenderer_free(ptr >>> 0, 1));
 
 /**
- * GGRS Renderer for WASM
- *
  * Uses `RefCell` for interior mutability so async methods (which require `&self`
  * in wasm_bindgen) can mutate the cached state.
  */
@@ -285,6 +283,37 @@ export class GGRSRenderer {
         } finally {
             wasm.__wbindgen_add_to_stack_pointer(16);
             wasm.__wbindgen_export4(deferred1_0, deferred1_1, 1);
+        }
+    }
+    /**
+     * Initialize layout manager with plot dimensions and axis ranges.
+     *
+     * Must be called after initPlotStream() to get axis ranges.
+     *
+     * # Arguments
+     * - `params_json`: JSON with PlotDimensions fields + axis ranges + facet counts
+     *
+     * # Returns
+     * JSON: `{"layout_state": {...}}` or `{"error": "..."}`
+     * @param {string} params_json
+     * @returns {string}
+     */
+    initLayout(params_json) {
+        let deferred2_0;
+        let deferred2_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(params_json, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            wasm.ggrsrenderer_initLayout(retptr, this.__wbg_ptr, ptr0, len0);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            deferred2_0 = r0;
+            deferred2_1 = r1;
+            return getStringFromWasm0(r0, r1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export4(deferred2_0, deferred2_1, 1);
         }
     }
     /**
@@ -337,6 +366,26 @@ export class GGRSRenderer {
         }
     }
     /**
+     * End an active interaction (mouseup).
+     * @returns {string}
+     */
+    interactionEnd() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.ggrsrenderer_interactionEnd(retptr, this.__wbg_ptr);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            deferred1_0 = r0;
+            deferred1_1 = r1;
+            return getStringFromWasm0(r0, r1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export4(deferred1_0, deferred1_1, 1);
+        }
+    }
+    /**
      * Load a chunk of data and return data-space coordinates (no pixel mapping).
      *
      * Same fetch + dequantize as loadAndMapChunk, but skips pixel mapping
@@ -352,10 +401,13 @@ export class GGRSRenderer {
      * }
      * ```
      * @param {number} chunk_size
+     * @param {string | null} [filter_json]
      * @returns {Promise<string>}
      */
-    loadDataChunk(chunk_size) {
-        const ret = wasm.ggrsrenderer_loadDataChunk(this.__wbg_ptr, chunk_size);
+    loadDataChunk(chunk_size, filter_json) {
+        var ptr0 = isLikeNone(filter_json) ? 0 : passStringToWasm0(filter_json, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+        var len0 = WASM_VECTOR_LEN;
+        const ret = wasm.ggrsrenderer_loadDataChunk(this.__wbg_ptr, chunk_size, ptr0, len0);
         return takeObject(ret);
     }
     /**
@@ -391,6 +443,26 @@ export class GGRSRenderer {
         }
     }
     /**
+     * Get current layout state (read-only snapshot).
+     * @returns {string}
+     */
+    getLayoutState() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.ggrsrenderer_getLayoutState(retptr, this.__wbg_ptr);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            deferred1_0 = r0;
+            deferred1_1 = r1;
+            return getStringFromWasm0(r0, r1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export4(deferred1_0, deferred1_1, 1);
+        }
+    }
+    /**
      * Initialize plot stream: fetch metadata, create WasmStreamGenerator + PlotGenerator.
      *
      * Input JSON:
@@ -419,6 +491,76 @@ export class GGRSRenderer {
         const ptr0 = passStringToWasm0(config_json, wasm.__wbindgen_export, wasm.__wbindgen_export2);
         const len0 = WASM_VECTOR_LEN;
         const ret = wasm.ggrsrenderer_initPlotStream(this.__wbg_ptr, ptr0, len0);
+        return takeObject(ret);
+    }
+    /**
+     * Update an active interaction (mousemove during drag).
+     * @param {number} dx
+     * @param {number} dy
+     * @param {number} x
+     * @param {number} y
+     * @param {string} params_json
+     * @returns {string}
+     */
+    interactionMove(dx, dy, x, y, params_json) {
+        let deferred2_0;
+        let deferred2_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(params_json, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            wasm.ggrsrenderer_interactionMove(retptr, this.__wbg_ptr, dx, dy, x, y, ptr0, len0);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            deferred2_0 = r0;
+            deferred2_1 = r1;
+            return getStringFromWasm0(r0, r1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export4(deferred2_0, deferred2_1, 1);
+        }
+    }
+    /**
+     * Ensure a CubeQuery exists with the given bindings (5A/5B/5C lifecycle).
+     *
+     * Input JSON:
+     * ```json
+     * {
+     *   "workflow_id": "abc123",
+     *   "step_id": "def456",
+     *   "x_column": "time",          // optional
+     *   "y_column": "value",
+     *   "col_facet_columns": ["condition"],
+     *   "row_facet_columns": ["replicate"]
+     * }
+     * ```
+     *
+     * Returns CubeQueryResult JSON:
+     * ```json
+     * {
+     *   "tables": {
+     *     "qt": "schema-id-12345",
+     *     "x_axis": "schema-id-67890",
+     *     "y_axis": "schema-id-abcde",
+     *     "column": "schema-id-fghij",
+     *     "row": "schema-id-klmno"
+     *   },
+     *   "n_rows": 1000,
+     *   "n_col_facets": 3,
+     *   "n_row_facets": 2
+     * }
+     * ```
+     *
+     * # Implementation Phases
+     * - **Phase 1-4:** Returns mock data (hardcoded table IDs)
+     * - **Phase 5-6:** Real gRPC calls to Tercen backend
+     * @param {string} params_json
+     * @returns {Promise<string>}
+     */
+    ensureCubeQuery(params_json) {
+        const ptr0 = passStringToWasm0(params_json, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.ggrsrenderer_ensureCubeQuery(this.__wbg_ptr, ptr0, len0);
         return takeObject(ret);
     }
     /**
@@ -489,6 +631,66 @@ export class GGRSRenderer {
         wasm.ggrsrenderer_initializeTercen(this.__wbg_ptr, ptr0, len0, ptr1, len1);
     }
     /**
+     * Start an interaction.
+     *
+     * # Arguments
+     * - `handler_type`: "Zoom", "Pan", "Reset", etc.
+     * - `zone`: "left_strip", "top_strip", "data_grid", "outside"
+     * - `x`, `y`: Canvas coordinates
+     * - `params_json`: JSON parameters (e.g., `{"delta": -120}` for wheel)
+     *
+     * # Returns
+     * JSON: `{"snapshot": {...}}` or `{"error": "..."}`
+     * @param {string} handler_type
+     * @param {string} zone
+     * @param {number} x
+     * @param {number} y
+     * @param {string} params_json
+     * @returns {string}
+     */
+    interactionStart(handler_type, zone, x, y, params_json) {
+        let deferred4_0;
+        let deferred4_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(handler_type, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passStringToWasm0(zone, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len1 = WASM_VECTOR_LEN;
+            const ptr2 = passStringToWasm0(params_json, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len2 = WASM_VECTOR_LEN;
+            wasm.ggrsrenderer_interactionStart(retptr, this.__wbg_ptr, ptr0, len0, ptr1, len1, x, y, ptr2, len2);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            deferred4_0 = r0;
+            deferred4_1 = r1;
+            return getStringFromWasm0(r0, r1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export4(deferred4_0, deferred4_1, 1);
+        }
+    }
+    /**
+     * Cancel an active interaction (Esc key, context loss).
+     * @returns {string}
+     */
+    interactionCancel() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.ggrsrenderer_interactionCancel(retptr, this.__wbg_ptr);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            deferred1_0 = r0;
+            deferred1_1 = r1;
+            return getStringFromWasm0(r0, r1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export4(deferred1_0, deferred1_1, 1);
+        }
+    }
+    /**
      * Load a chunk of data, dequantize, pixel-map, cull, and return visible points.
      *
      * Must call getStreamLayout() or getViewportChrome() before this to cache the layout.
@@ -537,6 +739,105 @@ export class GGRSRenderer {
             wasm.__wbindgen_add_to_stack_pointer(16);
             wasm.__wbindgen_export4(deferred2_0, deferred2_1, 1);
         }
+    }
+    /**
+     * Load data for a specific facet rectangle (stateless, for sliding window).
+     *
+     * Unlike load_data_chunk which uses continuous streaming with loaded_rows counter,
+     * this function is stateless and loads ALL points for the specified facet rectangle.
+     * Each call is independent - perfect for loading disconnected rectangles.
+     *
+     * # Arguments
+     * * `col_start` - Starting column index (inclusive)
+     * * `col_end` - Ending column index (exclusive)
+     * * `row_start` - Starting row index (inclusive)
+     * * `row_end` - Ending row index (exclusive)
+     *
+     * Returns JSON array of points: [{ x, y, ci, ri }, ...]
+     * @param {number} col_start
+     * @param {number} col_end
+     * @param {number} row_start
+     * @param {number} row_end
+     * @returns {Promise<string>}
+     */
+    loadFacetRectangle(col_start, col_end, row_start, row_end) {
+        const ret = wasm.ggrsrenderer_loadFacetRectangle(this.__wbg_ptr, col_start, col_end, row_start, row_end);
+        return takeObject(ret);
+    }
+    /**
+     * Initialize plot stream with mock data generator (for testing without Tercen).
+     *
+     * Input JSON:
+     * ```json
+     * {
+     *   "n_col_facets": 10,
+     *   "n_row_facets": 10,
+     *   "total_rows": 50000,
+     *   "x_min": 0,
+     *   "x_max": 100,
+     *   "y_min": 0,
+     *   "y_max": 100,
+     *   "theme": "gray",
+     *   "title": "Mock Plot",
+     *   "x_label": "X axis",
+     *   "y_label": "Y axis"
+     * }
+     * ```
+     *
+     * Returns same format as initPlotStream.
+     * @param {string} config_json
+     * @returns {string}
+     */
+    initMockPlotStream(config_json) {
+        let deferred2_0;
+        let deferred2_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(config_json, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            wasm.ggrsrenderer_initMockPlotStream(retptr, this.__wbg_ptr, ptr0, len0);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            deferred2_0 = r0;
+            deferred2_1 = r1;
+            return getStringFromWasm0(r0, r1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export4(deferred2_0, deferred2_1, 1);
+        }
+    }
+    /**
+     * Load incremental data for additional facet ranges (Phase 5 - future).
+     *
+     * Input JSON:
+     * ```json
+     * {
+     *   "col_range": [3, 5],
+     *   "row_range": [0, 3],
+     *   "chunk_size": 15000
+     * }
+     * ```
+     *
+     * Returns points JSON:
+     * ```json
+     * {
+     *   "done": false,
+     *   "loaded": 15000,
+     *   "total": 50000,
+     *   "points": [{"x": 1.5, "y": 2.3, "ci": 3, "ri": 0}, ...]
+     * }
+     * ```
+     *
+     * **Current status:** Stub implementation (returns empty). Phase 6 will add
+     * real incremental fetching with viewport expansion.
+     * @param {string} _params_json
+     * @returns {Promise<string>}
+     */
+    loadIncrementalData(_params_json) {
+        const ptr0 = passStringToWasm0(_params_json, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.ggrsrenderer_loadIncrementalData(this.__wbg_ptr, ptr0, len0);
+        return takeObject(ret);
     }
     /**
      * Load a chunk of data as a packed binary buffer (no JSON serialization).
@@ -919,7 +1220,7 @@ function __wbg_get_imports() {
                 const a = state0.a;
                 state0.a = 0;
                 try {
-                    return __wasm_bindgen_func_elem_36428(a, state0.b, arg0, arg1);
+                    return __wasm_bindgen_func_elem_36777(a, state0.b, arg0, arg1);
                 } finally {
                     state0.a = a;
                 }
@@ -956,6 +1257,10 @@ function __wbg_get_imports() {
         const ret = Promise.resolve(getObject(arg0));
         return addHeapObject(ret);
     };
+    imports.wbg.__wbg_setTimeout_06477c23d31efef1 = function() { return handleError(function (arg0, arg1, arg2) {
+        const ret = getObject(arg0).setTimeout(getObject(arg1), arg2);
+        return ret;
+    }, arguments) };
     imports.wbg.__wbg_set_169e13b608078b7b = function(arg0, arg1, arg2) {
         getObject(arg0).set(getArrayU8FromWasm0(arg1, arg2));
     };
@@ -1015,14 +1320,14 @@ function __wbg_get_imports() {
         const ret = getStringFromWasm0(arg0, arg1);
         return addHeapObject(ret);
     };
-    imports.wbg.__wbindgen_cast_49a1621a976e807f = function(arg0, arg1) {
-        // Cast intrinsic for `Closure(Closure { dtor_idx: 154, function: Function { arguments: [Externref], shim_idx: 155, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
-        const ret = makeMutClosure(arg0, arg1, wasm.__wasm_bindgen_func_elem_996, __wasm_bindgen_func_elem_1011);
-        return addHeapObject(ret);
-    };
     imports.wbg.__wbindgen_cast_d6cd19b81560fd6e = function(arg0) {
         // Cast intrinsic for `F64 -> Externref`.
         const ret = arg0;
+        return addHeapObject(ret);
+    };
+    imports.wbg.__wbindgen_cast_dbbceaac3432bddd = function(arg0, arg1) {
+        // Cast intrinsic for `Closure(Closure { dtor_idx: 218, function: Function { arguments: [Externref], shim_idx: 219, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
+        const ret = makeMutClosure(arg0, arg1, wasm.__wasm_bindgen_func_elem_1285, __wasm_bindgen_func_elem_1300);
         return addHeapObject(ret);
     };
     imports.wbg.__wbindgen_object_clone_ref = function(arg0) {

@@ -1,3 +1,9 @@
+/* DEPRECATED: This file has been replaced by ggrs_gpu_v2_v3.js
+ * All code below is commented out and should not be used.
+ * Date: 2026-03-03
+ */
+
+/*
 /**
  * WebGPU renderer for GGRS v2 — data-space GPU rendering.
  *
@@ -66,6 +72,7 @@ struct ViewUniforms {
     _pad0: f32,
     scroll_offset: vec2f,   // smooth pixel offset for facet scrolling
     _pad1: vec2f,
+    data_insets: vec4f,     // (left, top, right, bottom) — axis margins within cell
 }
 @group(0) @binding(0) var<uniform> v: ViewUniforms;
 
@@ -119,9 +126,13 @@ fn vs_main(
     let panel_x = v.grid_origin.x + f32(pc) * step_x + v.scroll_offset.x;
     let panel_y = v.grid_origin.y + f32(pr) * step_y + v.scroll_offset.y;
 
-    // Screen position: x left→right, y top→bottom (Y inverted)
-    let cx = panel_x + nx * v.cell_size.x;
-    let cy = panel_y + (1.0 - ny) * v.cell_size.y;
+    // Data area dimensions (cell minus axis margins)
+    let data_area_width = v.cell_size.x - v.data_insets.x - v.data_insets.z;
+    let data_area_height = v.cell_size.y - v.data_insets.y - v.data_insets.w;
+
+    // Screen position within data area: x left→right, y top→bottom (Y inverted)
+    let cx = panel_x + v.data_insets.x + nx * data_area_width;
+    let cy = panel_y + v.data_insets.y + (1.0 - ny) * data_area_height;
 
     // Quad expansion for SDF circle
     let corner = vec2f(f32(vi & 1u), f32((vi >> 1u) & 1u));
@@ -199,7 +210,7 @@ const INITIAL_POINT_CAPACITY = 100000;
 const BUFFER_USAGE = GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC;
 
 // View uniform size: 80 bytes (64 + scroll_offset vec2f + _pad1 vec2f)
-const VIEW_UNIFORM_SIZE = 80;
+const VIEW_UNIFORM_SIZE = 96;  // 80 + 16 (vec4f data_insets)
 // Rect uniform size: 8 bytes (padded to 16 for alignment)
 const RECT_UNIFORM_SIZE = 16;
 
@@ -452,9 +463,40 @@ export class GgrsGpuV2 {
         f32[17] = 0;                    // scroll_offset.y
         f32[18] = 0;                    // _pad1.x
         f32[19] = 0;                    // _pad1.y
+        f32[20] = params.dataInsetLeft || 0;    // data_insets.x (left)
+        f32[21] = params.dataInsetTop || 0;     // data_insets.y (top)
+        f32[22] = params.dataInsetRight || 0;   // data_insets.z (right)
+        f32[23] = params.dataInsetBottom || 0;  // data_insets.w (bottom)
 
         this._device.queue.writeBuffer(this._viewUniformBuffer, 0, buf);
         this.requestRedraw();
+    }
+
+    /**
+     * Sync full layout state from PlotState (convenience wrapper for setViewUniforms).
+     * @param {string} layoutStateJson - JSON string from PlotState.buildLayoutState()
+     */
+    syncLayoutState(layoutStateJson) {
+        const state = JSON.parse(layoutStateJson);
+        this.setViewUniforms({
+            xMin: state.vis_x_min,
+            xMax: state.vis_x_max,
+            yMin: state.vis_y_min,
+            yMax: state.vis_y_max,
+            gridOriginX: state.grid_origin_x,
+            gridOriginY: state.grid_origin_y,
+            cellWidth: state.cell_width,
+            cellHeight: state.cell_height,
+            cellSpacing: state.cell_spacing,
+            nVisibleCols: state.n_visible_cols,
+            nVisibleRows: state.n_visible_rows,
+            vpColStart: state.viewport_col_start,
+            vpRowStart: state.viewport_row_start,
+            dataInsetLeft: state.data_inset_left,
+            dataInsetTop: state.data_inset_top,
+            dataInsetRight: state.data_inset_right,
+            dataInsetBottom: state.data_inset_bottom,
+        });
     }
 
     // ── Axis range (16-byte write — THE ZOOM) ──────────────────────────────────
@@ -803,4 +845,6 @@ export class GgrsGpuV2 {
         pass.end();
         this._device.queue.submit([encoder.finish()]);
     }
+
 }
+*/

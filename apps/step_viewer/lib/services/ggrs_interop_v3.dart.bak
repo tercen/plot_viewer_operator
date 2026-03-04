@@ -1,0 +1,211 @@
+import 'dart:js_interop';
+import 'dart:js_interop_unsafe';
+
+/// Dart↔JS interop for GGRS v3 architecture.
+///
+/// This layer provides type-safe access to:
+/// - WASM GGRSRenderer (Rust compiled to WebAssembly)
+/// - Bootstrap v3 functions (JavaScript GPU/interaction management)
+class GgrsInteropV3 {
+  /// Load WASM module.
+  static Future<void> loadWasm() async {
+    final wasmModule = globalContext['wasmModule'] as JSObject?;
+    if (wasmModule == null) {
+      // Dynamically import WASM module
+      final importFn = globalContext.callMethod('import'.toJS) as JSFunction;
+      await importFn.callAsFunction(
+        null,
+        './ggrs/pkg/ggrs_wasm.js'.toJS,
+      );
+    }
+  }
+
+  /// Create a WASM renderer instance.
+  static JSObject createRenderer(String containerId) {
+    final wasmModule = globalContext['wasm_bindgen'] as JSObject;
+    final rendererClass = wasmModule['GGRSRenderer'] as JSFunction;
+    return rendererClass.callAsConstructor(containerId.toJS) as JSObject;
+  }
+
+  /// Initialize Tercen HTTP client in WASM.
+  static void initializeTercen(
+    JSObject renderer,
+    String serviceUri,
+    String token,
+  ) {
+    renderer.callMethod(
+      'initializeTercen'.toJS,
+      serviceUri.toJS,
+      token.toJS,
+    );
+  }
+
+  /// Initialize plot stream (async WASM call).
+  ///
+  /// Returns JSON with metadata:
+  /// - x_min, x_max, y_min, y_max (axis ranges)
+  /// - data_x_min, data_x_max, data_y_min, data_y_max (data anchors)
+  /// - n_col_facets, n_row_facets
+  /// - n_rows (total data rows)
+  static Future<String> initPlotStream(
+    JSObject renderer,
+    String cubeQueryId,
+  ) async {
+    final promise = renderer.callMethod(
+      'initPlotStream'.toJS,
+      cubeQueryId.toJS,
+    ) as JSPromise;
+    final result = await promise.toDart;
+    return (result as JSString).toDart;
+  }
+
+  /// Compute layout skeleton (chrome structure without data).
+  ///
+  /// Returns JSON with PlotDimensions fields:
+  /// - margin_left, margin_right, margin_top, margin_bottom
+  /// - strip_height, strip_width, n_col_levels
+  /// - cell_width, cell_height, cell_spacing
+  /// - panel_offset_x, panel_offset_y
+  /// - final_width, final_height
+  static Future<String> computeSkeleton(
+    JSObject renderer,
+    int width,
+    int height,
+    JSFunction textMeasurer,
+  ) async {
+    final promise = renderer.callMethod(
+      'computeSkeleton'.toJS,
+      width.toJS,
+      height.toJS,
+      textMeasurer,
+    ) as JSPromise;
+    final result = await promise.toDart;
+    return (result as JSString).toDart;
+  }
+
+  /// Initialize LayoutManager in WASM.
+  ///
+  /// Takes JSON with PlotDimensions + axis ranges + facet counts.
+  /// Returns LayoutState JSON or error.
+  static Future<String> initLayout(
+    JSObject renderer,
+    String paramsJson,
+  ) async {
+    final promise = renderer.callMethod(
+      'initLayout'.toJS,
+      paramsJson.toJS,
+    ) as JSPromise;
+    final result = await promise.toDart;
+    return (result as JSString).toDart;
+  }
+
+  /// Get current layout state from WASM LayoutManager.
+  static String getLayoutState(JSObject renderer) {
+    final result = renderer.callMethod('getLayoutState'.toJS);
+    return (result as JSString).toDart;
+  }
+
+  /// Get view chrome (backgrounds, axes, grid, borders).
+  ///
+  /// Returns JSON with chrome categories:
+  /// - panel_backgrounds, strip_backgrounds
+  /// - grid_lines, axis_lines, tick_marks, panel_borders
+  static Future<String> getViewChrome(JSObject renderer) async {
+    final promise = renderer.callMethod('getViewChrome'.toJS) as JSPromise;
+    final result = await promise.toDart;
+    return (result as JSString).toDart;
+  }
+
+  /// Ensure GPU is initialized for a container.
+  ///
+  /// Calls bootstrap_v3.ggrsV3EnsureGpu().
+  static Future<void> ensureGpu(
+    String containerId,
+    int width,
+    int height,
+    JSObject renderer,
+  ) async {
+    final bootstrapModule = globalContext['ggrsV3'] as JSObject;
+    final ensureGpuFn = bootstrapModule['ggrsV3EnsureGpu'] as JSFunction;
+    final promise = ensureGpuFn.callAsFunction(
+      null,
+      containerId.toJS,
+      width.toJS,
+      height.toJS,
+      renderer,
+    ) as JSPromise;
+    await promise.toDart;
+  }
+
+  /// Sync layout state to GPU.
+  ///
+  /// Writes 80-byte view uniform buffer.
+  static void syncLayoutToGpu(String containerId, String layoutStateJson) {
+    final bootstrapModule = globalContext['ggrsV3'] as JSObject;
+    final getGpuFn = bootstrapModule['ggrsV3GetGpu'] as JSFunction;
+    final gpu = getGpuFn.callAsFunction(null, containerId.toJS) as JSObject?;
+    if (gpu == null) {
+      throw Exception('GPU not initialized for $containerId');
+    }
+    gpu.callMethod('syncLayoutState'.toJS, layoutStateJson.toJS);
+  }
+
+  /// Render chrome to GPU named layers.
+  ///
+  /// Calls bootstrap_v3.ggrsV3RenderChrome().
+  static void renderChrome(String containerId, String chromeJson) {
+    final bootstrapModule = globalContext['ggrsV3'] as JSObject;
+    final renderChromeFn = bootstrapModule['ggrsV3RenderChrome'] as JSFunction;
+    renderChromeFn.callAsFunction(
+      null,
+      containerId.toJS,
+      chromeJson.toJS,
+    );
+  }
+
+  /// Stream data points to GPU in chunks.
+  ///
+  /// Calls bootstrap_v3.ggrsV3StreamData().
+  static Future<void> streamData(
+    String containerId,
+    JSObject renderer,
+    int chunkSize,
+  ) async {
+    final bootstrapModule = globalContext['ggrsV3'] as JSObject;
+    final streamDataFn = bootstrapModule['ggrsV3StreamData'] as JSFunction;
+    final promise = streamDataFn.callAsFunction(
+      null,
+      containerId.toJS,
+      renderer,
+      chunkSize.toJS,
+    ) as JSPromise;
+    await promise.toDart;
+  }
+
+  /// Cleanup GPU and interaction manager for a container.
+  static void cleanup(String containerId) {
+    final bootstrapModule = globalContext['ggrsV3'] as JSObject?;
+    if (bootstrapModule == null) return;
+
+    final cleanupFn = bootstrapModule['ggrsV3Cleanup'] as JSFunction;
+    cleanupFn.callAsFunction(null, containerId.toJS);
+  }
+
+  /// Create a text measurer function (for layout computation).
+  static JSFunction createTextMeasurer() {
+    // Create a simple canvas-based text measurer
+    final code = '''
+      (function(text, fontFamily, fontSize) {
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        ctx.font = fontSize + 'px ' + fontFamily;
+        const metrics = ctx.measureText(text);
+        return JSON.stringify({
+          width: metrics.width,
+          height: fontSize * 1.2
+        });
+      })
+    ''';
+    return globalContext.callMethod('eval'.toJS, code.toJS) as JSFunction;
+  }
+}

@@ -1,3 +1,9 @@
+/* DEPRECATED: This file has been replaced by ggrs_gpu_v3.js
+ * All code below is commented out and should not be used.
+ * Date: 2026-03-03
+ */
+
+/*
 /**
  * WebGPU renderer for GGRS plot visualization.
  *
@@ -1013,3 +1019,4 @@ function _lineToRect(ln) {
         h: Math.abs(dy),
     };
 }
+*/

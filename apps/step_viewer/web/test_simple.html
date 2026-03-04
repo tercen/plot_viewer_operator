@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Simple V3 Test</title>
+  <style>
+    body { margin: 20px; font-family: monospace; }
+    #log { background: #f0f0f0; padding: 10px; margin-bottom: 20px; }
+    #container { width: 600px; height: 400px; border: 2px solid #000; position: relative; background: white; }
+  </style>
+</head>
+<body>
+  <h2>V3 Simple Test</h2>
+  <div id="log">Loading...</div>
+  <div id="container"></div>
+
+  <script type="module">
+    const log = document.getElementById('log');
+
+    function addLog(msg) {
+      log.innerHTML += msg + '<br>';
+      console.log(msg);
+    }
+
+    try {
+      addLog('Step 1: Importing bootstrap_v3.js...');
+
+      // Dynamic import to catch errors
+      const bootstrap = await import('./ggrs/bootstrap_v3.js');
+      addLog('✓ Bootstrap imported successfully');
+      addLog('Checking window.ggrsV3...');
+
+      if (window.ggrsV3) {
+        addLog('✓ window.ggrsV3 is available!');
+        addLog('Available methods: ' + Object.keys(window.ggrsV3).join(', '));
+      } else {
+        addLog('✗ window.ggrsV3 is NOT available');
+      }
+
+    } catch (error) {
+      addLog('✗ ERROR: ' + error.message);
+      addLog('Stack: ' + error.stack);
+      console.error('Full error:', error);
+    }
+  </script>
+</body>
+</html>

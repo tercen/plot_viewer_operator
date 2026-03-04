@@ -10,6 +10,18 @@ export class GGRSRenderer {
    */
   resetView(): string;
   /**
+   * Initialize layout manager with plot dimensions and axis ranges.
+   *
+   * Must be called after initPlotStream() to get axis ranges.
+   *
+   * # Arguments
+   * - `params_json`: JSON with PlotDimensions fields + axis ranges + facet counts
+   *
+   * # Returns
+   * JSON: `{"layout_state": {...}}` or `{"error": "..."}`
+   */
+  initLayout(params_json: string): string;
+  /**
    * Compute layout from JSON payload (estimate text measurer).
    * Used for Phase 1 instant chrome — no Tercen connection needed.
    */
@@ -21,6 +33,10 @@ export class GGRSRenderer {
    * Returns LayoutInfo JSON (same format as getViewportChrome).
    */
   getViewChrome(): string;
+  /**
+   * End an active interaction (mouseup).
+   */
+  interactionEnd(): string;
   /**
    * Load a chunk of data and return data-space coordinates (no pixel mapping).
    *
@@ -37,7 +53,7 @@ export class GGRSRenderer {
    * }
    * ```
    */
-  loadDataChunk(chunk_size: number): Promise<string>;
+  loadDataChunk(chunk_size: number, filter_json?: string | null): Promise<string>;
   /**
    * Compute skeleton: PlotDimensions + scale breaks. Caches result for
    * getStaticChrome() and getViewportChrome().
@@ -47,6 +63,10 @@ export class GGRSRenderer {
    * final_width, final_height }
    */
   computeSkeleton(width: number, height: number, viewport_json: string, measure_text_fn: Function): string;
+  /**
+   * Get current layout state (read-only snapshot).
+   */
+  getLayoutState(): string;
   /**
    * Initialize plot stream: fetch metadata, create WasmStreamGenerator + PlotGenerator.
    *
@@ -72,6 +92,46 @@ export class GGRSRenderer {
    */
   initPlotStream(config_json: string): Promise<string>;
   /**
+   * Update an active interaction (mousemove during drag).
+   */
+  interactionMove(dx: number, dy: number, x: number, y: number, params_json: string): string;
+  /**
+   * Ensure a CubeQuery exists with the given bindings (5A/5B/5C lifecycle).
+   *
+   * Input JSON:
+   * ```json
+   * {
+   *   "workflow_id": "abc123",
+   *   "step_id": "def456",
+   *   "x_column": "time",          // optional
+   *   "y_column": "value",
+   *   "col_facet_columns": ["condition"],
+   *   "row_facet_columns": ["replicate"]
+   * }
+   * ```
+   *
+   * Returns CubeQueryResult JSON:
+   * ```json
+   * {
+   *   "tables": {
+   *     "qt": "schema-id-12345",
+   *     "x_axis": "schema-id-67890",
+   *     "y_axis": "schema-id-abcde",
+   *     "column": "schema-id-fghij",
+   *     "row": "schema-id-klmno"
+   *   },
+   *   "n_rows": 1000,
+   *   "n_col_facets": 3,
+   *   "n_row_facets": 2
+   * }
+   * ```
+   *
+   * # Implementation Phases
+   * - **Phase 1-4:** Returns mock data (hardcoded table IDs)
+   * - **Phase 5-6:** Real gRPC calls to Tercen backend
+   */
+  ensureCubeQuery(params_json: string): Promise<string>;
+  /**
    * Get static chrome (axes, title, column strips) from cached skeleton.
    *
    * Returns LayoutInfo JSON with only static elements populated.
@@ -91,6 +151,23 @@ export class GGRSRenderer {
    * Must be called before `initPlotStream()`.
    */
   initializeTercen(service_uri: string, token: string): void;
+  /**
+   * Start an interaction.
+   *
+   * # Arguments
+   * - `handler_type`: "Zoom", "Pan", "Reset", etc.
+   * - `zone`: "left_strip", "top_strip", "data_grid", "outside"
+   * - `x`, `y`: Canvas coordinates
+   * - `params_json`: JSON parameters (e.g., `{"delta": -120}` for wheel)
+   *
+   * # Returns
+   * JSON: `{"snapshot": {...}}` or `{"error": "..."}`
+   */
+  interactionStart(handler_type: string, zone: string, x: number, y: number, params_json: string): string;
+  /**
+   * Cancel an active interaction (Esc key, context loss).
+   */
+  interactionCancel(): string;
   /**
    * Load a chunk of data, dequantize, pixel-map, cull, and return visible points.
    *
@@ -117,6 +194,71 @@ export class GGRSRenderer {
    * Must call computeSkeleton() first.
    */
   getViewportChrome(viewport_json: string): string;
+  /**
+   * Load data for a specific facet rectangle (stateless, for sliding window).
+   *
+   * Unlike load_data_chunk which uses continuous streaming with loaded_rows counter,
+   * this function is stateless and loads ALL points for the specified facet rectangle.
+   * Each call is independent - perfect for loading disconnected rectangles.
+   *
+   * # Arguments
+   * * `col_start` - Starting column index (inclusive)
+   * * `col_end` - Ending column index (exclusive)
+   * * `row_start` - Starting row index (inclusive)
+   * * `row_end` - Ending row index (exclusive)
+   *
+   * Returns JSON array of points: [{ x, y, ci, ri }, ...]
+   */
+  loadFacetRectangle(col_start: number, col_end: number, row_start: number, row_end: number): Promise<string>;
+  /**
+   * Initialize plot stream with mock data generator (for testing without Tercen).
+   *
+   * Input JSON:
+   * ```json
+   * {
+   *   "n_col_facets": 10,
+   *   "n_row_facets": 10,
+   *   "total_rows": 50000,
+   *   "x_min": 0,
+   *   "x_max": 100,
+   *   "y_min": 0,
+   *   "y_max": 100,
+   *   "theme": "gray",
+   *   "title": "Mock Plot",
+   *   "x_label": "X axis",
+   *   "y_label": "Y axis"
+   * }
+   * ```
+   *
+   * Returns same format as initPlotStream.
+   */
+  initMockPlotStream(config_json: string): string;
+  /**
+   * Load incremental data for additional facet ranges (Phase 5 - future).
+   *
+   * Input JSON:
+   * ```json
+   * {
+   *   "col_range": [3, 5],
+   *   "row_range": [0, 3],
+   *   "chunk_size": 15000
+   * }
+   * ```
+   *
+   * Returns points JSON:
+   * ```json
+   * {
+   *   "done": false,
+   *   "loaded": 15000,
+   *   "total": 50000,
+   *   "points": [{"x": 1.5, "y": 2.3, "ci": 3, "ri": 0}, ...]
+   * }
+   * ```
+   *
+   * **Current status:** Stub implementation (returns empty). Phase 6 will add
+   * real incremental fetching with viewport expansion.
+   */
+  loadIncrementalData(_params_json: string): Promise<string>;
   /**
    * Load a chunk of data as a packed binary buffer (no JSON serialization).
    *
@@ -188,24 +330,34 @@ export interface InitOutput {
   readonly ggrsrenderer_computeLayoutWithMeasurer: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
   readonly ggrsrenderer_computeSkeleton: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
   readonly ggrsrenderer_computeTicksForRange: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
+  readonly ggrsrenderer_ensureCubeQuery: (a: number, b: number, c: number) => number;
+  readonly ggrsrenderer_getLayoutState: (a: number, b: number) => void;
   readonly ggrsrenderer_getStaticChrome: (a: number, b: number) => void;
   readonly ggrsrenderer_getStreamLayout: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
   readonly ggrsrenderer_getViewChrome: (a: number, b: number) => void;
   readonly ggrsrenderer_getViewportChrome: (a: number, b: number, c: number, d: number) => void;
   readonly ggrsrenderer_info: (a: number, b: number) => void;
+  readonly ggrsrenderer_initLayout: (a: number, b: number, c: number, d: number) => void;
+  readonly ggrsrenderer_initMockPlotStream: (a: number, b: number, c: number, d: number) => void;
   readonly ggrsrenderer_initPlotStream: (a: number, b: number, c: number) => number;
   readonly ggrsrenderer_initView: (a: number, b: number, c: number, d: number) => void;
   readonly ggrsrenderer_initializeTercen: (a: number, b: number, c: number, d: number, e: number) => void;
+  readonly ggrsrenderer_interactionCancel: (a: number, b: number) => void;
+  readonly ggrsrenderer_interactionEnd: (a: number, b: number) => void;
+  readonly ggrsrenderer_interactionMove: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
+  readonly ggrsrenderer_interactionStart: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => void;
   readonly ggrsrenderer_loadAndMapChunk: (a: number, b: number) => number;
-  readonly ggrsrenderer_loadDataChunk: (a: number, b: number) => number;
+  readonly ggrsrenderer_loadDataChunk: (a: number, b: number, c: number, d: number) => number;
   readonly ggrsrenderer_loadDataChunkPacked: (a: number, b: number) => number;
+  readonly ggrsrenderer_loadFacetRectangle: (a: number, b: number, c: number, d: number, e: number) => number;
+  readonly ggrsrenderer_loadIncrementalData: (a: number, b: number, c: number) => number;
   readonly ggrsrenderer_new: (a: number, b: number) => number;
   readonly ggrsrenderer_pan: (a: number, b: number, c: number, d: number, e: number) => void;
   readonly ggrsrenderer_resetView: (a: number, b: number) => void;
   readonly ggrsrenderer_zoom: (a: number, b: number, c: number, d: number, e: number) => void;
-  readonly __wasm_bindgen_func_elem_1011: (a: number, b: number, c: number) => void;
-  readonly __wasm_bindgen_func_elem_996: (a: number, b: number) => void;
-  readonly __wasm_bindgen_func_elem_36428: (a: number, b: number, c: number, d: number) => void;
+  readonly __wasm_bindgen_func_elem_1300: (a: number, b: number, c: number) => void;
+  readonly __wasm_bindgen_func_elem_1285: (a: number, b: number) => void;
+  readonly __wasm_bindgen_func_elem_36777: (a: number, b: number, c: number, d: number) => void;
   readonly __wbindgen_export: (a: number, b: number) => number;
   readonly __wbindgen_export2: (a: number, b: number, c: number, d: number) => number;
   readonly __wbindgen_export3: (a: number) => void;

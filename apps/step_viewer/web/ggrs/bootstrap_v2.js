@@ -1,3 +1,9 @@
+/* DEPRECATED: This file has been replaced by bootstrap_v2_v3.js
+ * All code below is commented out and should not be used.
+ * Date: 2026-03-03
+ */
+
+/*
 /**
  * GGRS V2 Bootstrap — data-space GPU rendering with named layers.
  *
@@ -809,3 +815,4 @@ window.ggrsV2Zoom = function(containerId, direction, sign) {
 
 // V2 cleanup
 window.ggrsV2ClearAll = ggrsV2ClearAll;
+*/

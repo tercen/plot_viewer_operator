@@ -1,7 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
-// ignore: avoid_web_libraries_in_flutter
-import 'dart:html' as html;
+import 'dart:js_interop';
+import 'dart:js_interop_unsafe';
+import 'package:web/web.dart' as web;
 import '../domain/models/message_envelope.dart';
 
 /// Routes postMessage events between webapp iframes.
@@ -10,25 +11,30 @@ import '../domain/models/message_envelope.dart';
 /// to the appropriate target iframe(s). Does not interpret payloads.
 class MessageRouter {
   final _controller = StreamController<MessageEnvelope>.broadcast();
-  final Map<String, html.IFrameElement> _iframes = {};
-  StreamSubscription<html.MessageEvent>? _subscription;
+  final Map<String, web.HTMLIFrameElement> _iframes = {};
 
   /// Stream of all incoming messages (for providers to subscribe).
   Stream<MessageEnvelope> get messages => _controller.stream;
 
   /// Start listening for postMessage events on the window.
   void start() {
-    _subscription = html.window.onMessage.listen(_handleMessage);
+    web.window.addEventListener(
+      'message',
+      (web.Event event) {
+        final msgEvent = event as web.MessageEvent;
+        _handleMessage(msgEvent);
+      }.toJS,
+    );
   }
 
   /// Stop listening.
   void dispose() {
-    _subscription?.cancel();
+    // Note: addEventListener cleanup would go here if needed
     _controller.close();
   }
 
   /// Register an iframe for a webapp instance.
-  void registerIframe(String instanceId, html.IFrameElement iframe) {
+  void registerIframe(String instanceId, web.HTMLIFrameElement iframe) {
     _iframes[instanceId] = iframe;
   }
 
@@ -40,10 +46,10 @@ class MessageRouter {
   /// Send a message to a specific webapp instance's iframe.
   void sendToInstance(String instanceId, MessageEnvelope envelope) {
     final iframe = _iframes[instanceId];
-    if (iframe?.contentWindow == null) return;
-    iframe!.contentWindow!.postMessage(
-      envelope.toJson(),
-      '*',
+    if (iframe == null || iframe.contentWindow == null) return;
+    iframe.contentWindow!.postMessage(
+      envelope.toJson().jsify(),
+      '*'.toJS,
     );
   }
 
@@ -52,20 +58,24 @@ class MessageRouter {
     for (final iframe in _iframes.values) {
       if (iframe.contentWindow == null) continue;
       iframe.contentWindow!.postMessage(
-        envelope.toJson(),
-        '*',
+        envelope.toJson().jsify(),
+        '*'.toJS,
       );
     }
   }
 
-  void _handleMessage(html.MessageEvent event) {
-    // Ignore messages that aren't our envelope format
-    if (event.data is! Map) return;
-
+  void _handleMessage(web.MessageEvent event) {
     try {
-      // JSON round-trip: converts all nested LinkedMap<dynamic, dynamic>
-      // (from JS interop) into clean Map<String, dynamic> for Dart.
-      final data = json.decode(json.encode(event.data)) as Map<String, dynamic>;
+      // Convert JS data to Dart via JSON (ensures proper Map<String, dynamic>)
+      final jsData = event.data;
+      if (jsData == null) return;
+
+      // Use JSON.stringify → json.decode pattern (same as project_nav MessageHelper)
+      final jsonObj = web.window['JSON'] as JSObject;
+      final stringifyFn = jsonObj['stringify'] as JSFunction;
+      final jsonStr = stringifyFn.callAsFunction(jsonObj, jsData) as JSString;
+      final data = json.decode(jsonStr.toDart) as Map<String, dynamic>;
+
       if (!data.containsKey('type') || !data.containsKey('source')) return;
 
       final envelope = MessageEnvelope.fromJson(data);

@@ -1,0 +1,298 @@
+import 'dart:convert';
+import 'dart:js_interop';
+import 'dart:js_interop_unsafe';
+import 'package:flutter/foundation.dart';
+
+import '../di/service_locator.dart';
+import '../presentation/providers/plot_state_provider.dart';
+import 'cube_query_service.dart';
+import 'ggrs_interop_v3.dart';
+
+/// V3 render orchestrator — Clean architecture with LayoutManager + InteractionManager.
+///
+/// Key differences from v2:
+/// - Uses LayoutManager (WASM) for all layout state
+/// - Uses InteractionManager (JS) for all user events
+/// - Simplified render pipeline: CubeQuery → initLayout → renderChrome → streamData
+/// - No manual ViewState sync - LayoutState is synced once via GPU
+///
+/// Render phases:
+///   1. CubeQuery lifecycle (Tercen SDK)
+///   2. initPlotStream (metadata: axis ranges, facet counts)
+///   3. initLayout (create LayoutManager with dimensions + ranges)
+///   4. renderChrome (backgrounds, axes, grid)
+///   5. streamData (progressive data loading)
+class GgrsServiceV3 extends ChangeNotifier {
+  GgrsServiceV3();
+
+  static const int _chunkSize = 15000;
+
+  int _renderGeneration = 0;
+  String? _error;
+  bool _wasmReady = false;
+  bool _tercenInitialized = false;
+  JSObject? _renderer;
+  JSFunction? _textMeasurer;
+  String? _serviceUri;
+  String? _token;
+
+  /// Track active containers
+  final Set<String> _activeContainers = {};
+  String? _activeContainerId;
+
+  String? get error => _error;
+  String? get activeContainerId => _activeContainerId;
+  bool get isRendering => _renderGeneration > 0;
+
+  void setTercenCredentials(String serviceUri, String token) {
+    _serviceUri = serviceUri;
+    _token = token;
+  }
+
+  Future<void> render(
+    String containerId,
+    PlotStateProvider state,
+    double width,
+    double height,
+  ) async {
+    final gen = ++_renderGeneration;
+    _activeContainerId = containerId;
+    _error = null;
+    notifyListeners();
+
+    try {
+      final sw = Stopwatch()..start();
+      void log(String msg) =>
+          debugPrint('[GgrsV3] $msg @ ${sw.elapsedMilliseconds}ms');
+
+      // Debounce rapid changes
+      await Future.delayed(const Duration(milliseconds: 16));
+      _checkGen(gen);
+
+      await _ensureWasm(gen);
+      log('WASM ready');
+
+      final workflowId = state.workflowId;
+      final stepId = state.stepId;
+      final hasY = state.yBinding != null;
+
+      // Early exit: no Y binding
+      if (workflowId == null || stepId == null || !hasY) {
+        log('No Y binding - skipping render');
+        _renderGeneration = 0;
+        notifyListeners();
+        return;
+      }
+
+      // ── Phase 1: CubeQuery ───────────────────────────────────────────────
+
+      log('CubeQuery start');
+      final cubeQueryService = getIt<CubeQueryService>();
+      final cubeQuery = await cubeQueryService.ensureCubeQuery(
+        workflowId,
+        stepId,
+        state.yBinding!,
+        state.xBinding,
+        state.colorBinding,
+        state.colFacetBinding,
+        state.rowFacetBinding,
+      );
+      _checkGen(gen);
+      log('CubeQuery complete: ${cubeQuery.id}');
+
+      // ── Phase 2: initPlotStream (get metadata) ───────────────────────────
+
+      log('initPlotStream start');
+      final metadataJson = await GgrsInteropV3.initPlotStream(
+        _renderer!,
+        cubeQuery.id!,
+      );
+      _checkGen(gen);
+
+      final metadata = jsonDecode(metadataJson) as Map<String, dynamic>;
+      if (metadata.containsKey('error')) {
+        throw Exception('initPlotStream failed: ${metadata['error']}');
+      }
+      log('initPlotStream complete');
+
+      // Extract axis ranges and facet counts
+      final xMin = metadata['x_min'] as double;
+      final xMax = metadata['x_max'] as double;
+      final yMin = metadata['y_min'] as double;
+      final yMax = metadata['y_max'] as double;
+      final dataXMin = metadata['data_x_min'] as double? ?? xMin;
+      final dataXMax = metadata['data_x_max'] as double? ?? xMax;
+      final dataYMin = metadata['data_y_min'] as double? ?? yMin;
+      final dataYMax = metadata['data_y_max'] as double? ?? yMax;
+      final nColFacets = metadata['n_col_facets'] as int? ?? 1;
+      final nRowFacets = metadata['n_row_facets'] as int? ?? 1;
+
+      log('Axis ranges: x=($xMin, $xMax), y=($yMin, $yMax), facets=${nColFacets}x$nRowFacets');
+
+      // ── Phase 3: computeSkeleton (get layout dimensions) ─────────────────
+
+      log('computeSkeleton start');
+      final skeletonJson = await GgrsInteropV3.computeSkeleton(
+        _renderer!,
+        width.toInt(),
+        height.toInt(),
+        _textMeasurer!,
+      );
+      _checkGen(gen);
+
+      final skeleton = jsonDecode(skeletonJson) as Map<String, dynamic>;
+      if (skeleton.containsKey('error')) {
+        throw Exception('computeSkeleton failed: ${skeleton['error']}');
+      }
+      log('computeSkeleton complete');
+
+      // ── Phase 4: initLayout (create LayoutManager) ───────────────────────
+
+      log('initLayout start');
+      final layoutParams = {
+        // PlotDimensions fields from skeleton
+        'margin_left': skeleton['margin_left'],
+        'margin_right': skeleton['margin_right'],
+        'margin_top': skeleton['margin_top'],
+        'margin_bottom': skeleton['margin_bottom'],
+        'strip_height': skeleton['strip_height'],
+        'strip_width': skeleton['strip_width'],
+        'n_col_levels': skeleton['n_col_levels'],
+        'title_reserve_top': skeleton['title_reserve_top'] ?? 0,
+        'title_reserve_bottom': skeleton['title_reserve_bottom'] ?? 0,
+        'title_reserve_left': skeleton['title_reserve_left'] ?? 0,
+        'title_reserve_right': skeleton['title_reserve_right'] ?? 0,
+        'x_label_reserve_bottom': skeleton['x_label_reserve_bottom'] ?? 0,
+        'y_label_reserve_left': skeleton['y_label_reserve_left'] ?? 0,
+        'legend_width': skeleton['legend_width'] ?? 0,
+        'legend_height': skeleton['legend_height'] ?? 0,
+        'legend_reserve_left': skeleton['legend_reserve_left'] ?? 0,
+        'legend_reserve_right': skeleton['legend_reserve_right'] ?? 0,
+        'legend_reserve_top': skeleton['legend_reserve_top'] ?? 0,
+        'legend_reserve_bottom': skeleton['legend_reserve_bottom'] ?? 0,
+        'final_width': skeleton['final_width'],
+        'final_height': skeleton['final_height'],
+        'plot_area_width': skeleton['plot_area_width'],
+        'available_height': skeleton['available_height'],
+        'cell_width': skeleton['cell_width'],
+        'cell_height': skeleton['cell_height'],
+        'cell_spacing': skeleton['cell_spacing'],
+        'panel_offset_x': skeleton['panel_offset_x'],
+        'panel_offset_y': skeleton['panel_offset_y'],
+        // Axis ranges
+        'x_min': xMin,
+        'x_max': xMax,
+        'y_min': yMin,
+        'y_max': yMax,
+        'data_x_min': dataXMin,
+        'data_x_max': dataXMax,
+        'data_y_min': dataYMin,
+        'data_y_max': dataYMax,
+        // Facet counts
+        'n_col_facets': nColFacets,
+        'n_row_facets': nRowFacets,
+      };
+
+      final layoutStateJson = await GgrsInteropV3.initLayout(
+        _renderer!,
+        jsonEncode(layoutParams),
+      );
+      _checkGen(gen);
+
+      final layoutState = jsonDecode(layoutStateJson) as Map<String, dynamic>;
+      if (layoutState.containsKey('error')) {
+        throw Exception('initLayout failed: ${layoutState['error']}');
+      }
+      log('initLayout complete');
+
+      // ── Phase 5: ensureGpu + sync layout ─────────────────────────────────
+
+      log('ensureGpu start');
+      await GgrsInteropV3.ensureGpu(
+        containerId,
+        width.toInt(),
+        height.toInt(),
+        _renderer!,
+      );
+      _checkGen(gen);
+      _activeContainers.add(containerId);
+      log('ensureGpu complete');
+
+      // Sync layout state to GPU
+      GgrsInteropV3.syncLayoutToGpu(containerId, layoutStateJson);
+      log('Layout synced to GPU');
+
+      // ── Phase 6: renderChrome ────────────────────────────────────────────
+
+      log('renderChrome start');
+      final chromeJson = await GgrsInteropV3.getViewChrome(_renderer!);
+      _checkGen(gen);
+
+      final chrome = jsonDecode(chromeJson) as Map<String, dynamic>;
+      if (chrome.containsKey('error')) {
+        throw Exception('getViewChrome failed: ${chrome['error']}');
+      }
+
+      GgrsInteropV3.renderChrome(containerId, chromeJson);
+      log('Chrome rendered');
+
+      // ── Phase 7: streamData ──────────────────────────────────────────────
+
+      log('streamData start');
+      await GgrsInteropV3.streamData(containerId, _renderer!, _chunkSize);
+      _checkGen(gen);
+      log('streamData complete');
+
+      _renderGeneration = 0;
+      notifyListeners();
+      log('Render complete');
+    } catch (e, stack) {
+      if (_renderGeneration == gen) {
+        _error = e.toString();
+        _renderGeneration = 0;
+        notifyListeners();
+        debugPrint('[GgrsV3] Error: $e');
+        debugPrint('[GgrsV3] Stack: $stack');
+      }
+    }
+  }
+
+  void _checkGen(int gen) {
+    if (gen != _renderGeneration) {
+      throw Exception('Render cancelled (stale generation)');
+    }
+  }
+
+  Future<void> _ensureWasm(int gen) async {
+    if (_wasmReady) return;
+
+    // Load WASM module
+    await GgrsInteropV3.loadWasm();
+    _checkGen(gen);
+
+    // Create renderer
+    final containerId = _activeContainerId ?? 'plot-container';
+    _renderer = GgrsInteropV3.createRenderer(containerId);
+    _checkGen(gen);
+
+    // Initialize Tercen client (if credentials available)
+    if (_serviceUri != null && _token != null && !_tercenInitialized) {
+      GgrsInteropV3.initializeTercen(_renderer!, _serviceUri!, _token!);
+      _tercenInitialized = true;
+    }
+
+    // Create text measurer
+    _textMeasurer = GgrsInteropV3.createTextMeasurer();
+
+    _wasmReady = true;
+  }
+
+  void dispose() {
+    // Cleanup all active containers
+    for (final containerId in _activeContainers) {
+      GgrsInteropV3.cleanup(containerId);
+    }
+    _activeContainers.clear();
+    super.dispose();
+  }
+}

@@ -1,0 +1,815 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>V3 Streaming Test</title>
+  <style>
+    body { margin: 20px; font-family: monospace; background: #f0f0f0; }
+    #status { background: #fff; padding: 10px; margin-bottom: 10px; border: 1px solid #ccc; }
+    #test-container { width: 780px; height: 780px; border: 2px solid #000; position: relative; background: white; margin-bottom: 20px; }
+    #controls { background: #fff; padding: 10px; border: 1px solid #ccc; }
+    #scroll-controls { background: #fff; padding: 10px; border: 1px solid #ccc; margin-bottom: 10px; }
+    .scroll-btn { margin: 2px; padding: 6px 12px; }
+    .ggrs-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
+    .facet-label { position: absolute; background: rgba(0, 255, 0, 0.7); color: black; padding: 4px 8px; font-size: 14px; font-weight: bold; border-radius: 3px; }
+    button { margin: 5px; padding: 8px 16px; }
+    .pass { color: green; font-weight: bold; }
+    .fail { color: red; font-weight: bold; }
+    .info { color: blue; }
+    #progress { width: 100%; height: 20px; background: #eee; margin: 10px 0; }
+    #progress-bar { height: 100%; background: #4CAF50; width: 0%; transition: width 0.3s; }
+  </style>
+</head>
+<body>
+  <h2>V3 Streaming Test (10×10 Facets, 3×3 Viewport)</h2>
+  <div id="status">
+    <div id="log"></div>
+    <div id="progress"><div id="progress-bar"></div></div>
+    <div id="stats"></div>
+  </div>
+  <div id="scroll-controls">
+    <strong>Viewport:</strong>
+    <button class="scroll-btn" id="btn-left">← Left</button>
+    <button class="scroll-btn" id="btn-right">Right →</button>
+    <button class="scroll-btn" id="btn-up">↑ Up</button>
+    <button class="scroll-btn" id="btn-down">Down ↓</button>
+    <br>
+    <strong>Zoom:</strong>
+    <button class="scroll-btn" id="btn-zoom-in">+ Zoom In (show less)</button>
+    <button class="scroll-btn" id="btn-zoom-out">− Zoom Out (show more)</button>
+    <button class="scroll-btn" id="btn-reset">Reset View</button>
+    <br>
+    <span id="viewport-info" style="font-weight: bold;"></span>
+  </div>
+  <div id="test-container"></div>
+  <div id="controls">
+    <button id="btn-small">Test: Small Dataset (1K points)</button>
+    <button id="btn-medium">Test: Medium Dataset (50K points)</button>
+    <button id="btn-large">Test: Large Dataset (500K points)</button>
+    <button id="btn-cancel">Test: Cancellation</button>
+    <button id="btn-clear">Clear Canvas</button>
+  </div>
+
+  <!-- Load bootstrap which exports window.ggrsV3 -->
+  <script type="module" src="ggrs/bootstrap_v3.js"></script>
+
+  <script>
+    window.addEventListener('load', () => {
+      setTimeout(init, 500); // Give modules time to load
+    });
+
+    const log = document.getElementById('log');
+    const stats = document.getElementById('stats');
+    const progressBar = document.getElementById('progress-bar');
+    const viewportInfo = document.getElementById('viewport-info');
+
+    let gpu = null;
+    let renderer = null;
+
+    // Layer z-order management (semantic layer system)
+    const LAYER_Z_INDEX = {
+      CANVAS: 1,      // WebGPU canvas for data points
+      TEXT: 3,        // Text labels (above data)
+      INTERACTION: 10 // Mouse/touch events (top)
+    };
+
+    let textLayer = null; // Text layer div
+
+    // Facet grid configuration
+    const TOTAL_COLS = 10;
+    const TOTAL_ROWS = 10;
+    const INITIAL_VISIBLE_COLS = 3.0;
+    const INITIAL_VISIBLE_ROWS = 3.0;
+    const CELL_SPACING = 10;
+    const CANVAS_WIDTH = 780;
+    const CANVAS_HEIGHT = 780;
+
+    // Fractional viewport state (floats for zoom support)
+    let viewportCol = 0.0;
+    let viewportRow = 0.0;
+    let visibleCols = INITIAL_VISIBLE_COLS;
+    let visibleRows = INITIAL_VISIBLE_ROWS;
+
+    // Incremental loading state (viewport-aware data fetching)
+    let loadedColRange = [0, 0]; // [start, end) - initially nothing loaded
+    let loadedRowRange = [0, 0];
+    let allLoadedPoints = []; // Accumulate all loaded points
+    const LOAD_THRESHOLD = 1.5; // Load more when within 1.5 cells of edge
+    const LOAD_BATCH_SIZE = 2; // Load 2 cells at a time when extending
+
+    // Animation state
+    let isAnimating = false;
+    let animationStartTime = 0;
+    const ANIMATION_DURATION = 200; // ms
+
+    function addLog(msg, status = 'info') {
+      const line = document.createElement('div');
+      line.className = status;
+      line.textContent = `${new Date().toLocaleTimeString()} - ${msg}`;
+      log.appendChild(line);
+      if (log.children.length > 20) log.removeChild(log.firstChild);
+      console.log(msg);
+    }
+
+    function updateProgress(loaded, total) {
+      const pct = (loaded / total * 100).toFixed(1);
+      progressBar.style.width = pct + '%';
+      stats.textContent = `Loaded: ${loaded.toLocaleString()} / ${total.toLocaleString()} points (${pct}%)`;
+    }
+
+    function updateStats(pointCount, elapsed) {
+      const rate = (pointCount / elapsed * 1000).toFixed(0);
+      stats.textContent = `Total: ${pointCount.toLocaleString()} points in ${elapsed}ms (${rate} points/sec)`;
+    }
+
+    // Mock WASM renderer simulating FULL production pipeline with FACETS
+    class MockStreamingRenderer {
+      constructor(totalPoints, chunkSize, nCols, nRows, fetchColRange, fetchRowRange) {
+        this.totalPoints = totalPoints;
+        this.chunkSize = chunkSize;
+        this.currentOffset = 0;
+        this.cancelled = false;
+        this.nCols = nCols;
+        this.nRows = nRows;
+        this.fetchColRange = fetchColRange; // [start, end] with buffer
+        this.fetchRowRange = fetchRowRange; // [start, end] with buffer
+
+        // Axis ranges (simulating initPlotStream metadata)
+        this.xMin = 0;
+        this.xMax = 100;
+        this.yMin = 0;
+        this.yMax = 100;
+
+        // Generate synthetic quantized data upfront (simulating Tercen table storage)
+        // Only generate data for facets in fetch range (viewport + buffer)
+        this.quantizedData = this._generateQuantizedData(totalPoints);
+      }
+
+      _generateQuantizedData(count) {
+        // Simulate quantized int16 storage (Tercen tables use int16 quantization)
+        // Distribute points across VISIBLE facets only (viewport + buffer)
+        const data = [];
+        const [fetchColStart, fetchColEnd] = this.fetchColRange;
+        const [fetchRowStart, fetchRowEnd] = this.fetchRowRange;
+        const fetchCols = fetchColEnd - fetchColStart;
+        const fetchRows = fetchRowEnd - fetchRowStart;
+        const totalFetchFacets = fetchCols * fetchRows;
+        const pointsPerFacet = Math.floor(count / totalFetchFacets);
+
+        console.log(`[MockWASM] Generating data for facet range: cols [${fetchColStart}, ${fetchColEnd}), rows [${fetchRowStart}, ${fetchRowEnd})`);
+        console.log(`[MockWASM] ${totalFetchFacets} facets × ${pointsPerFacet} points/facet = ${totalFetchFacets * pointsPerFacet} points`);
+
+        for (let i = 0; i < count; i++) {
+          // Assign to facet within fetch range
+          const facetIndex = Math.floor(i / pointsPerFacet) % totalFetchFacets;
+          const localCol = facetIndex % fetchCols;
+          const localRow = Math.floor(facetIndex / fetchCols);
+          const ci = fetchColStart + localCol; // Absolute column index
+          const ri = fetchRowStart + localRow; // Absolute row index
+
+          // Progress within this facet
+          const facetLocalIndex = i % pointsPerFacet;
+          const progress = facetLocalIndex / pointsPerFacet;
+
+          // Diagonal pattern in DATA SPACE (0-100 range)
+          const baseX = this.xMin + progress * (this.xMax - this.xMin);
+          const baseY = this.yMin + progress * (this.yMax - this.yMin);
+          const noise = (Math.random() - 0.5) * 10;
+
+          // Quantize to int16 range (-32768 to 32767)
+          const quantX = Math.floor(((baseX + noise - this.xMin) / (this.xMax - this.xMin)) * 65535 - 32768);
+          const quantY = Math.floor(((baseY + noise - this.yMin) / (this.yMax - this.yMin)) * 65535 - 32768);
+
+          data.push({ qx: quantX, qy: quantY, ci, ri });
+        }
+        return data;
+      }
+
+      async loadDataChunk() {
+        if (this.cancelled) {
+          return JSON.stringify({ done: true, loaded: 0, total: this.totalPoints, points: [] });
+        }
+
+        const remaining = this.totalPoints - this.currentOffset;
+        const count = Math.min(this.chunkSize, remaining);
+        const chunkStart = this.currentOffset;
+        const chunkEnd = chunkStart + count;
+
+        // STEP 1: Simulate HTTP fetch (network latency)
+        const httpStart = performance.now();
+        await new Promise(resolve => setTimeout(resolve, 15 + Math.random() * 10)); // 15-25ms
+        const httpTime = performance.now() - httpStart;
+
+        // STEP 2: Simulate TSON parsing (binary decode overhead)
+        const tsonStart = performance.now();
+        await new Promise(resolve => setTimeout(resolve, 3 + Math.random() * 2)); // 3-5ms
+        const tsonTime = performance.now() - tsonStart;
+
+        // STEP 3: Dequantization (int16 → float)
+        const dequantStart = performance.now();
+        const dequantized = [];
+        for (let i = chunkStart; i < chunkEnd; i++) {
+          const q = this.quantizedData[i];
+          // Dequantize: (quantized + 32768) / 65535 * (max - min) + min
+          const x = ((q.qx + 32768) / 65535) * (this.xMax - this.xMin) + this.xMin;
+          const y = ((q.qy + 32768) / 65535) * (this.yMax - this.yMin) + this.yMin;
+          dequantized.push({ x, y, ci: q.ci, ri: q.ri });
+        }
+        const dequantTime = performance.now() - dequantStart;
+
+        // STEP 4: Pixel mapping (data-space → pixel coords) - simulated inline
+        // In real code, this happens in GPU vertex shader, but WASM does culling in data-space
+        const mapStart = performance.now();
+        // No-op for mock (GPU does this), but simulate time cost
+        await new Promise(resolve => setTimeout(resolve, 1));
+        const mapTime = performance.now() - mapStart;
+
+        // STEP 5: Grid culling (check if in visible viewport)
+        // NOTE: In production, GPU vertex shader does viewport culling automatically
+        // We include it here to match production behavior and show culled counts
+        const cullStart = performance.now();
+        const visible = dequantized.filter(p => {
+          // Data-space bounds check (all points in 0-100 range pass)
+          return p.x >= this.xMin && p.x <= this.xMax &&
+                 p.y >= this.yMin && p.y <= this.yMax;
+        });
+        const cullTime = performance.now() - cullStart;
+
+        this.currentOffset += count;
+        const done = this.currentOffset >= this.totalPoints;
+
+        // Log timing breakdown (like real WASM would)
+        console.log(`[MockWASM] Chunk ${Math.floor(chunkStart / this.chunkSize)}: ` +
+                    `HTTP ${httpTime.toFixed(1)}ms, ` +
+                    `TSON ${tsonTime.toFixed(1)}ms, ` +
+                    `Dequant ${dequantTime.toFixed(1)}ms, ` +
+                    `Map ${mapTime.toFixed(1)}ms, ` +
+                    `Cull ${cullTime.toFixed(1)}ms, ` +
+                    `Visible ${visible.length}/${count}`);
+
+        return JSON.stringify({
+          done,
+          loaded: this.currentOffset,
+          total: this.totalPoints,
+          points: visible,
+        });
+      }
+
+      cancel() {
+        this.cancelled = true;
+      }
+    }
+
+    async function initGpu() {
+      if (gpu) return; // Already initialized
+
+      if (!window.ggrsV3) {
+        throw new Error('ggrsV3 not loaded');
+      }
+
+      addLog('Initializing WebGPU with fractional viewport...', 'info');
+      await window.ggrsV3.ensureWasmInitialized();
+      renderer = window.ggrsV3.createRenderer('test-container');
+      renderer.initializeTercen('http://localhost:5400', 'mock-token');
+
+      await window.ggrsV3.ggrsV3EnsureGpu('test-container', CANVAS_WIDTH, CANVAS_HEIGHT, renderer);
+      gpu = window.ggrsV3.ggrsV3GetGpu('test-container');
+
+      // Create layer system (canvas already created by bootstrap with z-index: 1)
+      const container = document.getElementById('test-container');
+
+      // Create text layer for labels
+      textLayer = document.createElement('div');
+      textLayer.className = 'ggrs-layer';
+      textLayer.id = 'text-layer';
+      textLayer.style.zIndex = LAYER_Z_INDEX.TEXT;
+      container.appendChild(textLayer);
+
+      addLog(`✓ Layer system initialized (canvas: ${LAYER_Z_INDEX.CANVAS}, text: ${LAYER_Z_INDEX.TEXT}, interaction: ${LAYER_Z_INDEX.INTERACTION})`, 'pass');
+
+      // Initialize fractional viewport
+      updateLayoutState();
+      renderChrome();
+
+      addLog(`✓ GPU initialized: ${TOTAL_COLS}×${TOTAL_ROWS} facets, showing ${visibleCols.toFixed(1)}×${visibleRows.toFixed(1)}`, 'pass');
+      updateViewportInfo();
+    }
+
+    function deriveCellDimensions() {
+      // Derive cell size from fractional viewport extent
+      const totalSpacingX = (visibleCols - 1) * CELL_SPACING;
+      const totalSpacingY = (visibleRows - 1) * CELL_SPACING;
+      const cellWidth = (CANVAS_WIDTH - totalSpacingX) / visibleCols;
+      const cellHeight = (CANVAS_HEIGHT - totalSpacingY) / visibleRows;
+      return { cellWidth, cellHeight };
+    }
+
+    function updateLayoutState() {
+      const { cellWidth, cellHeight } = deriveCellDimensions();
+
+      const layoutState = {
+        vis_x_min: 0,
+        vis_x_max: 100,
+        vis_y_min: 0,
+        vis_y_max: 100,
+        grid_origin_x: 0,
+        grid_origin_y: 0,
+        cell_width: cellWidth,      // Derived from fractional viewport
+        cell_height: cellHeight,    // Derived from fractional viewport
+        cell_spacing: CELL_SPACING,
+        n_visible_cols: visibleCols,      // Float
+        n_visible_rows: visibleRows,      // Float
+        viewport_col_start: viewportCol,  // Float
+        viewport_row_start: viewportRow,  // Float
+        scroll_offset_x: 0,
+        scroll_offset_y: 0,
+      };
+      gpu.syncLayoutState(JSON.stringify(layoutState));
+    }
+
+    function renderChrome() {
+      const { cellWidth, cellHeight } = deriveCellDimensions();
+
+      // Render grid structure for VISIBLE EXTENT (may be fractional)
+      const chrome = {
+        panel_backgrounds: [],
+        grid_lines: []
+      };
+
+      // Layout module computation: which facets are visible (including partial)?
+      const startFacetCol = Math.floor(viewportCol);
+      const endFacetCol = Math.ceil(viewportCol + visibleCols);
+      const startFacetRow = Math.floor(viewportRow);
+      const endFacetRow = Math.ceil(viewportRow + visibleRows);
+
+      // Render each visible facet using SAME formula as shader
+      for (let facetRow = startFacetRow; facetRow < endFacetRow; facetRow++) {
+        for (let facetCol = startFacetCol; facetCol < endFacetCol; facetCol++) {
+          // Layout module: compute position relative to viewport (same as shader)
+          const pc = facetCol - viewportCol;  // Same as shader: facet_col - viewport_col_start
+          const pr = facetRow - viewportRow;  // Same as shader: facet_row - viewport_row_start
+
+          // Layout module: pixel position (same formula as shader)
+          let x = pc * (cellWidth + CELL_SPACING);
+          let y = pr * (cellHeight + CELL_SPACING);
+          let width = cellWidth;
+          let height = cellHeight;
+
+          // Viewport culling: clip rect to canvas bounds [0, 0, CANVAS_WIDTH, CANVAS_HEIGHT]
+          // Facets at negative positions should show only their visible portion
+          if (x < 0) {
+            width = width + x; // Reduce width by amount off-screen
+            x = 0;             // Clamp to canvas origin
+          }
+          if (y < 0) {
+            height = height + y;
+            y = 0;
+          }
+          if (x + width > CANVAS_WIDTH) {
+            width = CANVAS_WIDTH - x; // Clip right edge
+          }
+          if (y + height > CANVAS_HEIGHT) {
+            height = CANVAS_HEIGHT - y; // Clip bottom edge
+          }
+
+          // Only render if any portion is visible
+          if (width > 0 && height > 0) {
+            chrome.panel_backgrounds.push({
+              x, y, width, height,
+              fill: '#f9f9f9'
+            });
+
+            // Borders for clipped panel (adjusted to clipped dimensions)
+            chrome.grid_lines.push(
+              { x, y, width: width, height: 1, color: '#cccccc' }, // Top
+              { x, y: y + height, width: width, height: 1, color: '#cccccc' }, // Bottom
+              { x, y, width: 1, height: height, color: '#cccccc' }, // Left
+              { x: x + width, y, width: 1, height: height, color: '#cccccc' } // Right
+            );
+          }
+        }
+      }
+
+      window.ggrsV3.ggrsV3RenderChrome('test-container', JSON.stringify(chrome));
+      renderFacetLabels();
+    }
+
+    function renderFacetLabels() {
+      if (!textLayer) return; // Layer not initialized yet
+
+      const { cellWidth, cellHeight } = deriveCellDimensions();
+
+      // Clear text layer
+      textLayer.innerHTML = '';
+
+      // Layout module: which facets are visible?
+      const startFacetCol = Math.floor(viewportCol);
+      const endFacetCol = Math.ceil(viewportCol + visibleCols);
+      const startFacetRow = Math.floor(viewportRow);
+      const endFacetRow = Math.ceil(viewportRow + visibleRows);
+
+      // Render label for each visible facet
+      for (let facetRow = startFacetRow; facetRow < endFacetRow; facetRow++) {
+        for (let facetCol = startFacetCol; facetCol < endFacetCol; facetCol++) {
+          // Only show label if facet is within bounds
+          if (facetCol < TOTAL_COLS && facetRow < TOTAL_ROWS) {
+            // Layout module: compute position (same as chrome and shader)
+            const pc = facetCol - viewportCol;
+            const pr = facetRow - viewportRow;
+            let x = pc * (cellWidth + CELL_SPACING);
+            let y = pr * (cellHeight + CELL_SPACING);
+
+            // Viewport culling: clamp label position to canvas bounds
+            // For partially visible facets, show label in visible portion
+            if (x < 0) x = 5; // Clamp to left edge with margin
+            if (y < 0) y = 5; // Clamp to top edge with margin
+
+            const label = document.createElement('div');
+            label.className = 'facet-label';
+            label.textContent = `(${facetCol},${facetRow})`;
+            label.style.left = `${x + 5}px`;
+            label.style.top = `${y + 5}px`;
+            textLayer.appendChild(label); // Add to text layer, not container
+          }
+        }
+      }
+    }
+
+    function updateViewportInfo() {
+      const { cellWidth, cellHeight } = deriveCellDimensions();
+      viewportInfo.textContent =
+        `Viewport: [${viewportCol.toFixed(1)}, ${viewportRow.toFixed(1)}] ` +
+        `Visible: ${visibleCols.toFixed(2)}×${visibleRows.toFixed(2)} facets ` +
+        `Cell: ${cellWidth.toFixed(0)}×${cellHeight.toFixed(0)}px`;
+    }
+
+    async function streamData(totalPoints, chunkSize) {
+      await initGpu();
+
+      // Layout module: calculate fetch range with buffer
+      // User requirement: if viewport starts at 1.5, fetch from floor(1.5)=1
+      // Add 2-3 cells buffer in each direction for smooth scrolling
+      const FETCH_BUFFER_CELLS = 2;
+      const visibleStartCol = Math.floor(viewportCol);
+      const visibleEndCol = Math.ceil(viewportCol + visibleCols);
+      const visibleStartRow = Math.floor(viewportRow);
+      const visibleEndRow = Math.ceil(viewportRow + visibleRows);
+
+      const fetchColStart = Math.max(0, visibleStartCol - FETCH_BUFFER_CELLS);
+      const fetchColEnd = Math.min(TOTAL_COLS, visibleEndCol + FETCH_BUFFER_CELLS);
+      const fetchRowStart = Math.max(0, visibleStartRow - FETCH_BUFFER_CELLS);
+      const fetchRowEnd = Math.min(TOTAL_ROWS, visibleEndRow + FETCH_BUFFER_CELLS);
+
+      addLog(`Fetch range: cols [${fetchColStart}, ${fetchColEnd}), rows [${fetchRowStart}, ${fetchRowEnd}) (${FETCH_BUFFER_CELLS} cell buffer)`, 'info');
+      addLog(`Visible range: cols [${visibleStartCol}, ${visibleEndCol}), rows [${visibleStartRow}, ${visibleEndRow})`, 'info');
+
+      const mockRenderer = new MockStreamingRenderer(
+        totalPoints, chunkSize, TOTAL_COLS, TOTAL_ROWS,
+        [fetchColStart, fetchColEnd],
+        [fetchRowStart, fetchRowEnd]
+      );
+      const allPoints = [];
+      const startTime = Date.now();
+
+      addLog(`Starting stream: ${totalPoints.toLocaleString()} points, chunk size ${chunkSize}`, 'info');
+
+      let done = false;
+      let chunkCount = 0;
+
+      while (!done) {
+        chunkCount++;
+        const resultJson = await mockRenderer.loadDataChunk();
+        const result = JSON.parse(resultJson);
+
+        if (result.points) {
+          // Convert to GPU format
+          const gpuPoints = result.points.map(p => ({
+            x: p.x,
+            y: p.y,
+            ci: p.ci,
+            ri: p.ri,
+            color_packed: 0x0000FFFF, // Blue
+            size: 3.0,
+          }));
+          allPoints.push(...gpuPoints);
+
+          // Progressive render - update GPU every chunk
+          gpu.setDataPoints(allPoints);
+          updateProgress(result.loaded, result.total);
+        }
+
+        done = result.done;
+
+        // Yield to browser for progressive paint
+        await new Promise(resolve => setTimeout(resolve, 0));
+      }
+
+      const elapsed = Date.now() - startTime;
+      updateStats(allPoints.length, elapsed);
+      addLog(`✓ Stream complete: ${chunkCount} chunks in ${elapsed}ms`, 'pass');
+
+      // Update global state
+      allLoadedPoints = allPoints;
+      loadedColRange = [fetchColStart, fetchColEnd];
+      loadedRowRange = [fetchRowStart, fetchRowEnd];
+    }
+
+    // Incremental loading: check if we need to load more data as viewport changes
+    async function checkAndLoadMore() {
+      if (allLoadedPoints.length === 0) return; // No initial load yet
+
+      const visibleStartCol = Math.floor(viewportCol);
+      const visibleEndCol = Math.ceil(viewportCol + visibleCols);
+      const visibleStartRow = Math.floor(viewportRow);
+      const visibleEndRow = Math.ceil(viewportRow + visibleRows);
+
+      const loadTasks = []; // Collect all regions to load
+
+      // Check right edge
+      const distanceToRightEdge = loadedColRange[1] - visibleEndCol;
+      if (distanceToRightEdge < LOAD_THRESHOLD && loadedColRange[1] < TOTAL_COLS) {
+        const newColEnd = Math.min(TOTAL_COLS, loadedColRange[1] + LOAD_BATCH_SIZE);
+        addLog(`Approaching right edge (distance: ${distanceToRightEdge.toFixed(1)}), loading cols [${loadedColRange[1]}, ${newColEnd})`, 'info');
+        loadTasks.push({
+          colRange: [loadedColRange[1], newColEnd], // Load ONLY new columns
+          rowRange: [loadedRowRange[0], loadedRowRange[1]] // Full row range
+        });
+      }
+
+      // Check left edge
+      const distanceToLeftEdge = visibleStartCol - loadedColRange[0];
+      if (distanceToLeftEdge < LOAD_THRESHOLD && loadedColRange[0] > 0) {
+        const newColStart = Math.max(0, loadedColRange[0] - LOAD_BATCH_SIZE);
+        addLog(`Approaching left edge (distance: ${distanceToLeftEdge.toFixed(1)}), loading cols [${newColStart}, ${loadedColRange[0]})`, 'info');
+        loadTasks.push({
+          colRange: [newColStart, loadedColRange[0]], // Load ONLY new columns
+          rowRange: [loadedRowRange[0], loadedRowRange[1]] // Full row range
+        });
+      }
+
+      // Check bottom edge
+      const distanceToBottomEdge = loadedRowRange[1] - visibleEndRow;
+      if (distanceToBottomEdge < LOAD_THRESHOLD && loadedRowRange[1] < TOTAL_ROWS) {
+        const newRowEnd = Math.min(TOTAL_ROWS, loadedRowRange[1] + LOAD_BATCH_SIZE);
+        addLog(`Approaching bottom edge (distance: ${distanceToBottomEdge.toFixed(1)}), loading rows [${loadedRowRange[1]}, ${newRowEnd})`, 'info');
+        loadTasks.push({
+          colRange: [loadedColRange[0], loadedColRange[1]], // Full col range
+          rowRange: [loadedRowRange[1], newRowEnd] // Load ONLY new rows
+        });
+      }
+
+      // Check top edge
+      const distanceToTopEdge = visibleStartRow - loadedRowRange[0];
+      if (distanceToTopEdge < LOAD_THRESHOLD && loadedRowRange[0] > 0) {
+        const newRowStart = Math.max(0, loadedRowRange[0] - LOAD_BATCH_SIZE);
+        addLog(`Approaching top edge (distance: ${distanceToTopEdge.toFixed(1)}), loading rows [${newRowStart}, ${loadedRowRange[0]})`, 'info');
+        loadTasks.push({
+          colRange: [loadedColRange[0], loadedColRange[1]], // Full col range
+          rowRange: [newRowStart, loadedRowRange[0]] // Load ONLY new rows
+        });
+      }
+
+      // Load all needed regions
+      for (const task of loadTasks) {
+        await loadIncrementalData(task.colRange, task.rowRange);
+      }
+    }
+
+    // Load data for a specific facet range and append to existing data
+    async function loadIncrementalData(colRange, rowRange) {
+      await initGpu();
+
+      const [colStart, colEnd] = colRange;
+      const [rowStart, rowEnd] = rowRange;
+      const numFacets = (colEnd - colStart) * (rowEnd - rowStart);
+      const pointsPerFacet = 5000; // Fixed points per facet for incremental loads
+      const totalPoints = numFacets * pointsPerFacet;
+      const chunkSize = 5000;
+
+      addLog(`Loading incremental data: cols [${colStart}, ${colEnd}), rows [${rowStart}, ${rowEnd}), ${totalPoints.toLocaleString()} points`, 'info');
+
+      const mockRenderer = new MockStreamingRenderer(
+        totalPoints, chunkSize, TOTAL_COLS, TOTAL_ROWS,
+        colRange, rowRange
+      );
+
+      let done = false;
+      const newPoints = [];
+
+      while (!done) {
+        const resultJson = await mockRenderer.loadDataChunk();
+        const result = JSON.parse(resultJson);
+
+        if (result.points) {
+          const gpuPoints = result.points.map(p => ({
+            x: p.x,
+            y: p.y,
+            ci: p.ci,
+            ri: p.ri,
+            color_packed: 0x0000FFFF, // Blue
+            size: 3.0,
+          }));
+          newPoints.push(...gpuPoints);
+        }
+
+        done = result.done;
+        await new Promise(resolve => setTimeout(resolve, 0));
+      }
+
+      // Append to global points and update GPU
+      allLoadedPoints.push(...newPoints);
+      gpu.setDataPoints(allLoadedPoints);
+
+      // Update loaded range
+      loadedColRange = [Math.min(loadedColRange[0], colStart), Math.max(loadedColRange[1], colEnd)];
+      loadedRowRange = [Math.min(loadedRowRange[0], rowStart), Math.max(loadedRowRange[1], rowEnd)];
+
+      addLog(`✓ Loaded ${newPoints.length} points, total now: ${allLoadedPoints.length.toLocaleString()}`, 'pass');
+      addLog(`Loaded region: cols [${loadedColRange[0]}, ${loadedColRange[1]}), rows [${loadedRowRange[0]}, ${loadedRowRange[1]})`, 'info');
+    }
+
+    async function init() {
+      if (!window.ggrsV3) {
+        addLog('✗ ggrsV3 not loaded!', 'fail');
+        return;
+      }
+
+      // Wire up buttons
+      document.getElementById('btn-small').onclick = async () => {
+        try {
+          await streamData(1000, 500); // 1K points, 500/chunk = 2 chunks
+        } catch (error) {
+          addLog(`✗ ERROR: ${error.message}`, 'fail');
+        }
+      };
+
+      document.getElementById('btn-medium').onclick = async () => {
+        try {
+          await streamData(50000, 5000); // 50K points, 5K/chunk = 10 chunks
+        } catch (error) {
+          addLog(`✗ ERROR: ${error.message}`, 'fail');
+        }
+      };
+
+      document.getElementById('btn-large').onclick = async () => {
+        try {
+          await streamData(500000, 15000); // 500K points, 15K/chunk = 34 chunks
+        } catch (error) {
+          addLog(`✗ ERROR: ${error.message}`, 'fail');
+        }
+      };
+
+      document.getElementById('btn-cancel').onclick = async () => {
+        try {
+          addLog('Testing cancellation - stream will be cancelled mid-way', 'info');
+          const mockRenderer = new MockStreamingRenderer(100000, 5000);
+
+          // Start streaming
+          setTimeout(() => {
+            addLog('Cancelling stream...', 'info');
+            mockRenderer.cancel();
+          }, 100); // Cancel after 100ms
+
+          await streamData(100000, 5000);
+          addLog('✓ Cancellation test complete', 'pass');
+        } catch (error) {
+          addLog(`✗ ERROR: ${error.message}`, 'fail');
+        }
+      };
+
+      document.getElementById('btn-clear').onclick = () => {
+        if (gpu) {
+          gpu.setDataPoints([]);
+          allLoadedPoints = [];
+          loadedColRange = [0, 0];
+          loadedRowRange = [0, 0];
+          addLog('Canvas cleared, loaded ranges reset', 'info');
+          stats.textContent = '';
+          progressBar.style.width = '0%';
+        }
+      };
+
+      // Smooth animation helper
+      function animateViewportChange(targetCol, targetRow, targetVisibleCols, targetVisibleRows, needsChromeRebuild) {
+        if (isAnimating) return; // Skip if already animating
+
+        const startCol = viewportCol;
+        const startRow = viewportRow;
+        const startVisibleCols = visibleCols;
+        const startVisibleRows = visibleRows;
+
+        isAnimating = true;
+        animationStartTime = performance.now();
+
+        function animate(currentTime) {
+          const elapsed = currentTime - animationStartTime;
+          const progress = Math.min(elapsed / ANIMATION_DURATION, 1.0);
+          const eased = 1 - Math.pow(1 - progress, 3); // Ease-out cubic
+
+          // Interpolate values
+          viewportCol = startCol + (targetCol - startCol) * eased;
+          viewportRow = startRow + (targetRow - startRow) * eased;
+          visibleCols = startVisibleCols + (targetVisibleCols - startVisibleCols) * eased;
+          visibleRows = startVisibleRows + (targetVisibleRows - startVisibleRows) * eased;
+
+          updateLayoutState();
+          if (needsChromeRebuild) {
+            renderChrome();
+          } else {
+            renderFacetLabels(); // Just update labels for pan
+          }
+          updateViewportInfo();
+
+          if (progress < 1.0) {
+            requestAnimationFrame(animate);
+          } else {
+            // Snap to final values
+            viewportCol = targetCol;
+            viewportRow = targetRow;
+            visibleCols = targetVisibleCols;
+            visibleRows = targetVisibleRows;
+            updateLayoutState();
+            if (needsChromeRebuild) renderChrome();
+            updateViewportInfo();
+            isAnimating = false;
+
+            // Check if we need to load more data (incremental loading)
+            checkAndLoadMore();
+          }
+        }
+
+        requestAnimationFrame(animate);
+      }
+
+      // Wire up scroll buttons (smooth animated pan)
+      document.getElementById('btn-left').onclick = () => {
+        const panAmount = 0.5;
+        if (viewportCol >= panAmount) {
+          const targetCol = viewportCol - panAmount;
+          animateViewportChange(targetCol, viewportRow, visibleCols, visibleRows, true); // Chrome rebuild needed - facet positions change
+          addLog(`Panning left to col ${targetCol.toFixed(1)}`, 'info');
+        }
+      };
+
+      document.getElementById('btn-right').onclick = () => {
+        const panAmount = 0.5;
+        if (viewportCol + visibleCols + panAmount <= TOTAL_COLS) {
+          const targetCol = viewportCol + panAmount;
+          animateViewportChange(targetCol, viewportRow, visibleCols, visibleRows, true); // Chrome rebuild needed - facet positions change
+          addLog(`Panning right to col ${targetCol.toFixed(1)}`, 'info');
+        }
+      };
+
+      document.getElementById('btn-up').onclick = () => {
+        const panAmount = 0.5;
+        if (viewportRow >= panAmount) {
+          const targetRow = viewportRow - panAmount;
+          animateViewportChange(viewportCol, targetRow, visibleCols, visibleRows, true); // Chrome rebuild needed - facet positions change
+          addLog(`Panning up to row ${targetRow.toFixed(1)}`, 'info');
+        }
+      };
+
+      document.getElementById('btn-down').onclick = () => {
+        const panAmount = 0.5;
+        if (viewportRow + visibleRows + panAmount <= TOTAL_ROWS) {
+          const targetRow = viewportRow + panAmount;
+          animateViewportChange(viewportCol, targetRow, visibleCols, visibleRows, true); // Chrome rebuild needed - facet positions change
+          addLog(`Panning down to row ${targetRow.toFixed(1)}`, 'info');
+        }
+      };
+
+      // Zoom buttons (smooth animated zoom, keep top-left stable)
+      document.getElementById('btn-zoom-in').onclick = () => {
+        const zoomFactor = 0.8; // Show 80% as much (cells get bigger)
+        const targetCols = visibleCols * zoomFactor;
+        const targetRows = visibleRows * zoomFactor;
+        if (targetCols > 0.1 && targetRows > 0.1) {
+          animateViewportChange(viewportCol, viewportRow, targetCols, targetRows, true);
+          addLog(`Zooming in: ${targetCols.toFixed(2)}×${targetRows.toFixed(2)} facets`, 'info');
+        }
+      };
+
+      document.getElementById('btn-zoom-out').onclick = () => {
+        const zoomFactor = 1.25; // Show 125% as much (cells get smaller)
+        const targetCols = visibleCols * zoomFactor;
+        const targetRows = visibleRows * zoomFactor;
+        animateViewportChange(viewportCol, viewportRow, targetCols, targetRows, true);
+        addLog(`Zooming out: ${targetCols.toFixed(2)}×${targetRows.toFixed(2)} facets`, 'info');
+      };
+
+      document.getElementById('btn-reset').onclick = () => {
+        viewportCol = 0.0;
+        viewportRow = 0.0;
+        visibleCols = INITIAL_VISIBLE_COLS;
+        visibleRows = INITIAL_VISIBLE_ROWS;
+        updateLayoutState();
+        renderChrome();
+        updateViewportInfo();
+        addLog('Reset to initial view', 'info');
+      };
+
+      addLog('Ready. Click a button to test streaming with facets.', 'info');
+    }
+  </script>
+</body>
+</html>

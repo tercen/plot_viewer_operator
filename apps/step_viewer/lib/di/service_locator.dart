@@ -6,6 +6,7 @@ import '../domain/services/data_service.dart';
 import '../implementations/services/tercen_factor_service.dart';
 import '../services/cube_query_service.dart';
 import '../services/ggrs_service_v2.dart';
+import '../services/ggrs_service_v3.dart';
 
 final GetIt serviceLocator = GetIt.instance;
 
@@ -22,7 +23,7 @@ void setupServiceLocator({
   serviceLocator.registerLazySingleton<CubeQueryService>(
     () => CubeQueryService(tercenFactory),
   );
-  serviceLocator.registerLazySingleton<GgrsServiceV2>(
-    () => GgrsServiceV2(),
+  serviceLocator.registerLazySingleton<GgrsServiceV3>(
+    () => GgrsServiceV3(),
   );
 }

@@ -7,25 +7,35 @@
 
 ### Two Coordinate Systems
 
-**Axis Coordinates** (`full_x_min` / `full_x_max`):
+**Axis Coordinates** (`full_x_min` / `full_x_max`, `full_y_min` / `full_y_max`):
 - Include margins for axis labels and ticks
-- The axis ORIGIN (where labels start) is at `full_x_min`
-- Example: `full_x_min = -23783`, `full_x_max = 499472`
+- X axis ORIGIN (where labels start) is at `full_x_min`
+- Y axis TOP (where labels end) is at `full_y_max`
+- Example: `full_x_min = -23783`, `full_x_max = 499472`, `full_y_min = -5000`, `full_y_max = 105000`
 
-**Data Coordinates** (`data_x_min` / `data_x_max`):
+**Data Coordinates** (`data_x_min` / `data_x_max`, `data_y_min` / `data_y_max`):
 - The actual bounds of the data points (no margins)
-- The FIRST data point is at `data_x_min`
-- Example: `data_x_min = 0`, `data_x_max = 499472`
+- X: FIRST data point is at `data_x_min`
+- Y: LAST data point is at `data_y_max`
+- Example: `data_x_min = 0`, `data_x_max = 499472`, `data_y_min = 0`, `data_y_max = 100000`
 
-**The Gap:**
+**The Gaps:**
 ```
+X axis (anchor at MIN/left):
 |--- margin ---| data points →
 full_x_min     data_x_min
    ↓              ↓
  -23783           0
+
+Y axis (anchor at MAX/top):
+              ↓ data_y_max
+   data points    100000
+              |--- margin ---|
+              ↓ full_y_max
+                 105000
 ```
 
-This gap MUST stay constant in **pixel width** as you zoom.
+These gaps MUST stay constant in **pixel width** as you zoom.
 
 ---
 
@@ -121,7 +131,7 @@ fn zoom(&mut self, axis: &str, sign: i32) {
         let old_span = self.vis_x_max - self.vis_x_min;
         let new_span = (old_span / factor).max(1e-15).min(full_span);
 
-        // Calculate current pixel gap
+        // Calculate current pixel gap (from axis origin to first data point)
         let old_pixel_gap = if old_span.abs() > 1e-15 {
             (self.data_x_min - self.vis_x_min) / old_span * self.cell_width
         } else {
@@ -135,9 +145,35 @@ fn zoom(&mut self, axis: &str, sign: i32) {
             0.0
         };
 
-        // Anchor at data_x_min
+        // Anchor at data_x_min (left)
         self.vis_x_min = self.data_x_min - data_units_gap;
         self.vis_x_max = self.vis_x_min + new_span;
+
+        // Clamp to full range
+        // ... (shift both if hit boundaries)
+    }
+
+    if axis == "y" || axis == "both" {
+        let old_span = self.vis_y_max - self.vis_y_min;
+        let new_span = (old_span / factor).max(1e-15).min(full_span);
+
+        // Calculate current pixel gap (from last data point to axis top)
+        let old_pixel_gap = if old_span.abs() > 1e-15 {
+            (self.vis_y_max - self.data_y_max) / old_span * self.cell_height
+        } else {
+            0.0
+        };
+
+        // Maintain same pixel gap in new span
+        let data_units_gap = if new_span.abs() > 1e-15 {
+            old_pixel_gap * new_span / self.cell_height
+        } else {
+            0.0
+        };
+
+        // Anchor at data_y_max (top)
+        self.vis_y_max = self.data_y_max + data_units_gap;
+        self.vis_y_min = self.vis_y_max - new_span;
 
         // Clamp to full range
         // ... (shift both if hit boundaries)
@@ -366,3 +402,9 @@ The gap between axis origin and data origin must remain constant in pixels durin
 - Added comprehensive logging
 - Verified constant pixel gap across zoom operations
 - Documented architecture for future viewport interactions
+- **Y-axis zoom now anchors at MAX (top)** instead of MIN (bottom)
+  - X-axis: anchors at `data_x_min` (left/origin)
+  - Y-axis: anchors at `data_y_max` (top)
+  - Added `data_y_max` field to ViewState and InitViewParams
+  - Updated zoom logic to maintain constant gap from top
+  - Dart side now passes `data_y_max` from metadata to initView

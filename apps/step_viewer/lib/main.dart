@@ -8,10 +8,12 @@ import 'presentation/providers/plot_state_provider.dart';
 import 'presentation/widgets/plot_area.dart';
 import 'presentation/widgets/top_toolbar.dart';
 import 'services/ggrs_service_v2.dart';
+import 'services/ggrs_service_v3.dart';
 import 'utils/message_helper.dart';
 
 /// Global reference so messages can reach the provider after the app is running.
 PlotStateProvider? _plotStateProvider;
+GgrsServiceV3? _ggrsService;
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -33,8 +35,8 @@ void main() async {
 
         setupServiceLocator(tercenFactory: factory);
 
-        // Pass credentials to GGRS for WASM Tercen HTTP calls
-        serviceLocator<GgrsServiceV2>().setTercenCredentials(
+        // Pass credentials to GGRS (no-op in mock mode, kept for future Phase 2)
+        serviceLocator<GgrsServiceV3>().setTercenCredentials(
           serviceUri ?? '',
           token,
         );
@@ -58,6 +60,27 @@ void main() async {
       }
     } else if (type == 'theme-changed') {
       // Theme changes handled by orchestrator's ThemeMode — no-op for now
+    } else if (type == 'load-facets') {
+      // Background facet loading triggered by viewport scroll/zoom
+      debugPrint('[main] ========== RECEIVED load-facets MESSAGE ==========');
+      final containerId = payload['containerId'] as String?;
+      final newRectangles = payload['newRectangles'] as List<dynamic>?;
+      final neededRange = payload['neededRange'] as Map<String, dynamic>?;
+      final loadId = payload['loadId'] as int?;
+
+      debugPrint('[main] containerId: $containerId');
+      debugPrint('[main] newRectangles: $newRectangles');
+      debugPrint('[main] neededRange: $neededRange');
+      debugPrint('[main] loadId: $loadId');
+      debugPrint('[main] _ggrsService: ${_ggrsService != null ? "available" : "NULL"}');
+
+      if (containerId != null && newRectangles != null && neededRange != null && loadId != null && _ggrsService != null) {
+        debugPrint('[main] → Calling loadFacetsInBackground with ${newRectangles.length} rectangle(s)');
+        await _ggrsService!.loadFacetsInBackground(containerId, newRectangles, neededRange, loadId);
+        debugPrint('[main] → loadFacetsInBackground completed');
+      } else {
+        debugPrint('[main] ⚠️ Missing required fields or service, skipping');
+      }
     }
   });
 
@@ -75,7 +98,8 @@ class StepViewerApp extends StatelessWidget {
     final plotState = PlotStateProvider();
     _plotStateProvider = plotState;
 
-    final ggrsService = serviceLocator<GgrsServiceV2>();
+    final ggrsService = serviceLocator<GgrsServiceV3>();
+    _ggrsService = ggrsService;
 
     return MultiProvider(
       providers: [
